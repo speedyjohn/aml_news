@@ -1,12 +1,14 @@
 """Данные для страницы «Обзор»."""
+from datetime import timedelta
 from urllib.parse import urlencode
 
-from django.db.models import Count
+from django.db.models import Count, Q
 from django.urls import reverse
+from django.utils import timezone
 
 import config as aml_config
 
-from .models import Article, Entity, Job, Match, Schedule
+from .models import Article, Entity, Job, Match, NegNews, Schedule
 
 STRONG_SCORE = 60   # с какого балла совпадение считаем «сильным»
 
@@ -59,5 +61,30 @@ def dashboard_callback(request, context):
         "new_job_url": _url("admin:screening_job_add"),
         "dump_url": _url("dump_json"),
         "dump_no_text_url": _url("dump_json", text=0),
+        "neg_dump_url": _url("neg_dump_json"),
+        **_negative_block(),
     })
     return context
+
+
+def _negative_block() -> dict:
+    strong = aml_config.NEG_STRONG_SCORE
+    since = timezone.now() - timedelta(days=7)
+    week = NegNews.objects.filter(Q(published__gte=since) |
+                                  Q(published__isnull=True, collected_at__gte=since))
+    agg = week.aggregate(total=Count("id"),
+                         new_strong=Count("id", filter=Q(score__gte=strong, review_status="new")),
+                         relevant=Count("id", filter=Q(review_status="relevant")))
+    news = "admin:screening_negnews_changelist"
+    return {
+        "neg": {
+            **agg,
+            "strong": strong,
+            "overview_url": _url("neg_overview"),
+            "new_strong_url": _url(news, review_status__exact="new", strength="strong", period=7),
+            "relevant_url": _url(news, review_status__exact="relevant", period=7),
+            "total_url": _url(news, period=7),
+            "top": week.filter(score__gte=strong, review_status="new")
+                       .order_by("-published", "-score")[:6],
+        }
+    }

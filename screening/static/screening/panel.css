@@ -1,9 +1,13 @@
 /* Свои стили панели поверх Unfold. */
 
 /* --- Форма нового запуска: показываем только блоки, нужные выбранной команде --- */
-#job_form:has(#id_command option:checked:is([value="fetch-text"], [value="match"], [value="load-names"])) fieldset.job-collect,
-#job_form:has(#id_command option:checked:is([value="collect"], [value="fetch-text"], [value="load-names"])) fieldset.job-match,
-#job_form:has(#id_command option:checked:is([value="collect"], [value="fetch-text"])) fieldset.job-names {
+#job_form:has(#id_command option:checked:is([value="fetch-text"], [value="match"], [value="load-names"], [value="neg-analyze"])) fieldset.job-collect,
+#job_form:has(#id_command option:checked:is([value="collect"], [value="fetch-text"], [value="load-names"], [value="neg-pipeline"], [value="neg-analyze"])) fieldset.job-match,
+#job_form:has(#id_command option:checked:is([value="collect"], [value="fetch-text"], [value="neg-pipeline"], [value="neg-analyze"])) fieldset.job-names {
+  display: none;
+}
+/* Telegram — только для негативных новостей */
+#job_form:has(#id_command option:checked:is([value="pipeline"], [value="collect"])) .field-use_telegram {
   display: none;
 }
 
@@ -33,7 +37,7 @@
 .pf-btn.sm { font-size: 12px; padding: 3px 9px; }
 .pf-btn .material-symbols-outlined { font-size: 18px; }
 
-.pf-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+.pf-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
 .pf-kpi .v { font-size: 22px; font-weight: 600; color: var(--color-base-900); }
 .pf-kpi .v.red { color: #b91c1c; }
 .pf-kpi .v.orange { color: #c2410c; }
@@ -67,6 +71,45 @@
 .pf-rel a { color: var(--color-primary-700); }
 .pf-rel a:hover { text-decoration: underline; }
 .pf-pager { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; }
+
+/* --- Негативные новости: обзор --- */
+.neg-alert { display: flex; gap: 8px; align-items: center; font-size: 13px; padding: 10px 14px; border-radius: var(--border-radius, 6px); background: #fff7ed; color: #9a3412; border: 1px solid #fed7aa; }
+.neg-alert .material-symbols-outlined { font-size: 20px; }
+.neg-kpi { display: flex; gap: 12px; align-items: center; }
+.neg-kpi:hover { border-color: var(--color-primary-300); }
+.neg-kpi .material-symbols-outlined { color: var(--color-primary-600); }
+.neg-barrow { display: block; }
+.neg-barrow:hover b { color: var(--color-primary-700); }
+
+.neg-legend { display: flex; gap: 14px; font-size: 12px; color: var(--color-base-600); }
+.neg-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.neg-sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+.neg-sw.strong, .neg-seg.strong { background: var(--color-primary-700); }
+.neg-sw.rest, .neg-seg.rest { background: var(--color-primary-300); }
+
+.neg-chart { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 6px; height: 220px; padding-bottom: 20px; }
+.neg-yaxis { position: relative; font-size: 11px; color: var(--color-base-500); }
+.neg-yaxis span { position: absolute; right: 0; transform: translateY(50%); }
+.neg-plot { position: relative; display: flex; align-items: flex-end; gap: 2px; border-bottom: 1px solid var(--color-base-300); }
+.neg-grid { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--color-base-200); pointer-events: none; }
+.neg-col { position: relative; flex: 1 1 0; height: 100%; display: flex; align-items: flex-end; outline: none; }
+.neg-col:hover, .neg-col:focus { background: var(--color-base-50); }
+.neg-stack { width: 100%; max-width: 28px; margin: 0 auto; display: flex; flex-direction: column; gap: 2px; }
+.neg-seg { min-height: 2px; }
+.neg-stack > .neg-seg:first-child { border-radius: 4px 4px 0 0; }
+.neg-x { position: absolute; top: 100%; left: 50%; transform: translateX(-50%); margin-top: 4px; font-size: 11px; color: var(--color-base-500); white-space: nowrap; }
+.neg-tip { display: none; position: absolute; top: 0; left: 50%; transform: translateX(-50%); z-index: 5; background: var(--color-base-900); color: #fff; font-size: 12px; line-height: 1.5; padding: 6px 10px; border-radius: 6px; white-space: nowrap; pointer-events: none; }
+.neg-col:hover .neg-tip, .neg-col:focus .neg-tip { display: block; }
+.neg-col:first-child .neg-tip, .neg-col:nth-child(2) .neg-tip, .neg-col:nth-child(3) .neg-tip { left: 0; transform: none; }
+.neg-col:last-child .neg-tip, .neg-col:nth-last-child(2) .neg-tip { left: auto; right: 0; transform: none; }
+.neg-table { margin-top: 8px; font-size: 12px; }
+.neg-table summary { cursor: pointer; }
+.neg-table table { margin-top: 6px; border-collapse: collapse; }
+.neg-table td, .neg-table th { padding: 2px 14px 2px 0; text-align: left; border-bottom: 1px solid var(--color-base-100); }
+
+/* --- Негативные новости: карточка --- */
+.neg-text { max-width: 900px; line-height: 1.65; white-space: normal; }
+.neg-mark { background: #fde68a; padding: 0 2px; border-radius: 2px; }
 
 /* --- Лог запуска --- */
 #joblog { max-height: 600px; overflow: auto; white-space: pre-wrap; font-size: 12px; line-height: 1.5; background: var(--color-base-50); color: var(--color-base-800); padding: 12px; border: 1px solid var(--color-base-200); border-radius: var(--border-radius, 6px); min-width: 700px; }

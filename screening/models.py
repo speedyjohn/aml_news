@@ -1,6 +1,6 @@
 """
-Модели поверх таблиц, которые создаёт main.py (managed=False — Django их не трогает),
-плюс таблица запусков Job, которой управляет сама панель.
+Модели поверх таблиц, которые создаёт db.py (managed=False — Django их не трогает),
+плюс таблицы запусков и автозапуска, которыми управляет сама панель.
 """
 from datetime import timedelta
 
@@ -11,6 +11,11 @@ from django.utils import timezone
 KIND_CHOICES = [("org", "Юрлицо"), ("person", "Физлицо")]
 REVIEW_CHOICES = [("new", "Не проверено"), ("relevant", "Релевантно"),
                   ("false_positive", "Ложное срабатывание")]
+NEG_REVIEW_CHOICES = [("new", "Не проверено"), ("relevant", "Актуально"),
+                      ("irrelevant", "Не актуально")]
+NEG_COLLECTOR_CHOICES = [("telegram", "Telegram"), ("rss", "RSS"), ("gnews", "Google News"),
+                         ("gdelt", "GDELT"), ("manual", "Вручную")]
+NEG_SOURCE_KINDS = [("telegram", "Telegram-канал"), ("rss", "RSS-лента")]
 
 
 class Entity(models.Model):
@@ -36,7 +41,7 @@ class Article(models.Model):
     url = models.TextField("Ссылка", unique=True)
     title = models.TextField("Заголовок", null=True, blank=True)
     source = models.TextField("Источник", null=True, blank=True)
-    published = models.TextField("Дата", null=True, blank=True)
+    published = models.DateTimeField("Дата", null=True, blank=True)
     lang = models.TextField("Язык", null=True, blank=True)
     country = models.TextField("Страна", null=True, blank=True)
     collector = models.TextField("Откуда собрано", null=True, blank=True)
@@ -44,8 +49,8 @@ class Article(models.Model):
     summary = models.TextField("Описание", null=True, blank=True)
     text = models.TextField("Полный текст", null=True, blank=True)
     text_status = models.TextField("Статус текста", null=True, blank=True)
-    collected_at = models.TextField("Собрано", null=True, blank=True)
-    matched_at = models.TextField("Проверено матчингом", null=True, blank=True)
+    collected_at = models.DateTimeField("Собрано", null=True, blank=True)
+    matched_at = models.DateTimeField("Проверено матчингом", null=True, blank=True)
 
     class Meta:
         managed = False
@@ -67,7 +72,7 @@ class Match(models.Model):
     source = models.TextField("Источник", null=True)
     title = models.TextField("Заголовок", null=True)
     url = models.TextField("Ссылка", null=True)
-    published = models.TextField("Дата", null=True)
+    published = models.DateTimeField("Дата", null=True)
     lang = models.TextField("Язык", null=True)
     matched_text = models.TextField("Как написано в новости", null=True)
     categories = models.TextField("Категории", null=True)
@@ -77,7 +82,7 @@ class Match(models.Model):
     score_raw = models.IntegerField("Балл до штрафа", null=True)
     frequent = models.BooleanField("Частое имя", default=False)
     snippet = models.TextField("Фрагмент", null=True)
-    created_at = models.TextField("Найдено", null=True)
+    created_at = models.DateTimeField("Найдено", null=True)
     review_status = models.TextField("Статус проверки", choices=REVIEW_CHOICES, default="new")
     review_note = models.TextField("Комментарий", null=True, blank=True)
 
@@ -91,6 +96,105 @@ class Match(models.Model):
         return f"{self.entity_name} — {self.title or self.url}"
 
 
+# --- Негативные новости о Казахстане -------------------------------------------
+class NegSource(models.Model):
+    kind = models.TextField("Тип", choices=NEG_SOURCE_KINDS, default="telegram")
+    name = models.TextField("Название издания / канала")
+    handle = models.TextField(
+        "Адрес", help_text="Для Telegram — имя публичного канала (например, tengrinews или "
+                           "https://t.me/tengrinews), для RSS — полный адрес ленты")
+    enabled = models.BooleanField("Включён", default=True)
+    kz = models.BooleanField(
+        "Казахстанское издание", default=True,
+        help_text="Если выключено, новость берётся, только когда в ней упомянут Казахстан, "
+                  "регион или город РК")
+    region = models.TextField("Регион издания", null=True, blank=True,
+                              help_text="Для региональных изданий: подставится, если в "
+                                        "тексте регион не назван")
+    note = models.TextField("Заметка", null=True, blank=True)
+    last_run_at = models.DateTimeField("Последнее чтение", null=True, blank=True)
+    last_status = models.TextField("Результат", null=True, blank=True)
+    last_found = models.IntegerField("Записей в ленте", null=True, blank=True)
+    last_kept = models.IntegerField("Новых негативных", null=True, blank=True)
+    last_item_at = models.DateTimeField("Последняя публикация", null=True, blank=True)
+    total_kept = models.IntegerField("Всего найдено", default=0)
+    created_at = models.DateTimeField("Добавлен", default=timezone.now)
+
+    class Meta:
+        managed = False
+        db_table = "neg_sources"
+        verbose_name = "источник"
+        verbose_name_plural = "Источники негативных новостей"
+
+    def __str__(self):
+        return self.name
+
+    def clean(self):
+        h = (self.handle or "").strip()
+        if self.kind == "telegram":
+            h = h.rstrip("/").rsplit("/", 1)[-1].lstrip("@")
+            if not h or not all(c.isascii() and (c.isalnum() or c == "_") for c in h):
+                raise ValidationError({"handle": "Укажите имя канала: латиница, цифры, _"})
+        elif not h.startswith(("http://", "https://")):
+            raise ValidationError({"handle": "Адрес RSS должен начинаться с http:// или https://"})
+        self.handle = h
+        if NegSource.objects.filter(kind=self.kind, handle=h).exclude(pk=self.pk).exists():
+            raise ValidationError({"handle": "Такой источник уже есть"})
+
+
+class NegNews(models.Model):
+    url = models.TextField("Ссылка", unique=True, null=True, blank=True)
+    post_url = models.TextField("Пост в Telegram", null=True, blank=True)
+    title = models.TextField("Название", null=True, blank=True)
+    source = models.TextField("Издание", null=True, blank=True)
+    source_domain = models.TextField("Домен", null=True, blank=True)
+    source_ref = models.ForeignKey(NegSource, models.DO_NOTHING, db_column="source_id",
+                                   null=True, blank=True, verbose_name="Источник")
+    collector = models.TextField("Откуда собрано", choices=NEG_COLLECTOR_CHOICES)
+    query = models.TextField("Запрос / лента", null=True, blank=True)
+    published = models.DateTimeField("Дата публикации", null=True, blank=True)
+    lang = models.TextField("Язык", null=True, blank=True)
+    summary = models.TextField("Описание / текст поста", null=True, blank=True)
+    text = models.TextField("Текст", null=True, blank=True)
+    text_status = models.TextField("Статус текста", null=True, blank=True)
+    title_key = models.TextField(null=True, blank=True)
+    copies = models.IntegerField("Перепечаток", default=1)
+    also_in = models.TextField("Также в изданиях", null=True, blank=True)
+    categories = models.TextField("Категории", null=True, blank=True)
+    keywords = models.TextField("Ключевые слова", null=True, blank=True)
+    regions = models.TextField("Регион", null=True, blank=True)
+    kz_outlet = models.BooleanField("Казахстанское издание", default=False)
+    kz_signal = models.TextField("Почему о Казахстане", null=True, blank=True)
+    score = models.IntegerField("Балл", default=0)
+    tone = models.FloatField("Тональность GDELT", null=True, blank=True)
+    review_status = models.TextField("Статус", choices=NEG_REVIEW_CHOICES, default="new")
+    review_note = models.TextField("Комментарий", null=True, blank=True)
+    reviewed_by = models.TextField("Проверил", null=True, blank=True)
+    reviewed_at = models.DateTimeField("Когда проверено", null=True, blank=True)
+    collected_at = models.DateTimeField("Собрано", default=timezone.now)
+    analyzed_at = models.DateTimeField("Размечено", null=True, blank=True)
+    # колонка search (tsvector) есть в таблице, но в модели её нет намеренно:
+    # её вычисляет сам PostgreSQL, а поиск идёт через сырой SQL (см. admin)
+
+    class Meta:
+        managed = False
+        db_table = "neg_news"
+        verbose_name = "негативную новость"   # винительный: «Добавить…», «Удалить…»
+        verbose_name_plural = "Негативные новости"
+
+    def __str__(self):
+        return self.title or self.url or f"#{self.pk}"
+
+    @property
+    def category_list(self):
+        return [c.strip() for c in (self.categories or "").split(";") if c.strip()]
+
+    @property
+    def region_list(self):
+        return [c.strip() for c in (self.regions or "").split(";") if c.strip()]
+
+
+# --- Запуски и автозапуск (таблицы панели) ------------------------------------
 class Job(models.Model):
     COMMANDS = [
         ("pipeline", "Полный цикл: сбор → тексты → матчинг"),
@@ -98,6 +202,9 @@ class Job(models.Model):
         ("fetch-text", "Докачать полный текст"),
         ("match", "Матчинг по списку"),
         ("load-names", "Загрузить список имён"),
+        ("neg-pipeline", "Негативные новости РК: сбор → тексты → разметка"),
+        ("neg-analyze", "Негативные новости: пересчитать разметку"),
+        ("both", "Всё сразу: скрининг + негативные новости"),
     ]
     STATUSES = [("queued", "В очереди"), ("running", "Выполняется"), ("done", "Готово"),
                 ("failed", "Ошибка"), ("stopped", "Остановлено"),
@@ -107,8 +214,12 @@ class Job(models.Model):
     use_gdelt = models.BooleanField("GDELT", default=True)
     use_gnews = models.BooleanField("Google News", default=True)
     use_rss = models.BooleanField("RSS-ленты", default=True)
+    use_telegram = models.BooleanField("Telegram-каналы", default=True,
+                                       help_text="Только для негативных новостей")
+    neg_source_id = models.PositiveIntegerField("Только источник №", null=True, blank=True)
     days = models.PositiveIntegerField("За сколько дней", default=90,
-                                       help_text="GDELT хранит ~90 дней, Google News — ~30")
+                                       help_text="GDELT хранит ~90 дней, Google News — ~30. "
+                                                 "Для негативных новостей хватит 7")
     slice_days = models.PositiveIntegerField(
         "Резать GDELT на окна (дней)", null=True, blank=True,
         help_text="Например 7: соберёт в разы больше статей, но займёт ~час")
@@ -139,8 +250,11 @@ class Job(models.Model):
     def clean(self):
         if self.command == "load-names" and not self.names_file:
             raise ValidationError({"names_file": "Для загрузки списка нужен файл"})
-        if self.command in ("collect", "pipeline"):
-            if not (self.use_gdelt or self.use_gnews or self.use_rss):
+        if self.command in ("collect", "pipeline", "neg-pipeline", "both"):
+            sources = [self.use_gdelt, self.use_gnews, self.use_rss]
+            if self.command in ("neg-pipeline", "both"):
+                sources.append(self.use_telegram)
+            if not any(sources):
                 raise ValidationError("Выберите хотя бы один источник")
             if not self.days:
                 raise ValidationError({"days": "Укажите хотя бы 1 день"})
@@ -148,8 +262,10 @@ class Job(models.Model):
 
 class Schedule(models.Model):
     """Автозапуск по расписанию (одна запись на всю панель)."""
-    COMMANDS = [("pipeline", "Полный цикл: сбор → тексты → матчинг"),
-                ("collect", "Только сбор новостей")]
+    COMMANDS = [("pipeline", "Скрининг: сбор → тексты → матчинг"),
+                ("collect", "Скрининг: только сбор новостей"),
+                ("neg-pipeline", "Негативные новости РК"),
+                ("both", "Всё сразу: скрининг + негативные новости")]
 
     enabled = models.BooleanField("Включён", default=False)
     every_hours = models.PositiveIntegerField("Запускать каждые (часов)", default=24)
@@ -158,6 +274,8 @@ class Schedule(models.Model):
     use_gdelt = models.BooleanField("GDELT", default=True)
     use_gnews = models.BooleanField("Google News", default=True)
     use_rss = models.BooleanField("RSS-ленты", default=True)
+    use_telegram = models.BooleanField("Telegram-каналы", default=True,
+                                       help_text="Только для негативных новостей")
     days = models.PositiveIntegerField(
         "Собирать новости за (дней)", default=3,
         help_text="Для ежедневного запуска хватит 2–3 дней: старое уже в базе")

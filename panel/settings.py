@@ -1,11 +1,17 @@
 """Настройки админ-панели. Панель работает с той же базой, что и main.py."""
 import os
+import sys
 from pathlib import Path
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 from django.templatetags.static import static
 from django.urls import reverse_lazy
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
+import config as aml_config  # noqa: E402  (читает .env)
 
 # Локальный инструмент. Если будете выкладывать на сервер — задайте свой ключ
 # в переменной окружения PANEL_SECRET_KEY и выключите DEBUG.
@@ -22,6 +28,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "django.contrib.postgres",
     "screening",
 ]
 
@@ -48,17 +55,30 @@ TEMPLATES = [{
     ]},
 }]
 
-# Та же база, в которую пишет main.py
-AML_DB_PATH = Path(os.environ.get("AML_DB", BASE_DIR / "aml_news.sqlite"))
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": AML_DB_PATH,
-        # IMMEDIATE: транзакция сразу ждёт блокировку на запись (до timeout),
-        # а не падает с «database is locked» посреди работы, пока пишет main.py.
-        "OPTIONS": {"timeout": 30, "transaction_mode": "IMMEDIATE"},
+# Та же база PostgreSQL, в которую пишет main.py (адрес — AML_DATABASE_URL в .env)
+def _db_from_url(url: str) -> dict:
+    if not url:
+        # Без .env панель всё равно должна запускаться (например, для setup), но
+        # любое обращение к базе выдаст понятную ошибку подключения.
+        url = "postgresql://aml@127.0.0.1:5432/aml_news"
+    u = urlsplit(url)
+    opts = dict(parse_qsl(u.query))
+    opts.setdefault("connect_timeout", "10")
+    opts.setdefault("application_name", "aml_panel")
+    return {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": unquote(u.path.lstrip("/")) or "aml_news",
+        "USER": unquote(u.username or ""),
+        "PASSWORD": unquote(u.password or ""),
+        "HOST": u.hostname or "127.0.0.1",
+        "PORT": str(u.port or 5432),
+        "OPTIONS": opts,
+        "CONN_MAX_AGE": 60,
+        "CONN_HEALTH_CHECKS": True,
     }
-}
+
+
+DATABASES = {"default": _db_from_url(aml_config.DATABASE_URL)}
 
 AUTH_PASSWORD_VALIDATORS = []
 LANGUAGE_CODE = "ru"
@@ -130,6 +150,17 @@ UNFOLD = {
                      "link": reverse_lazy("admin:screening_article_changelist")},
                     {"title": "Список получателей", "icon": "groups",
                      "link": reverse_lazy("admin:screening_entity_changelist")},
+                ],
+            },
+            {
+                "title": "Негативные новости РК",
+                "items": [
+                    {"title": "Обзор", "icon": "monitoring",
+                     "link": reverse_lazy("neg_overview")},
+                    {"title": "Новости", "icon": "campaign",
+                     "link": reverse_lazy("admin:screening_negnews_changelist")},
+                    {"title": "Источники", "icon": "rss_feed",
+                     "link": reverse_lazy("admin:screening_negsource_changelist")},
                 ],
             },
             {

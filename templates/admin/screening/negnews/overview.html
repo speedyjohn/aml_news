@@ -1,0 +1,153 @@
+{% extends "admin/base_site.html" %}
+{% load unfold %}
+{# Обзор негативных новостей. Стили — screening/static/screening/panel.css (классы neg-*, pf-*) #}
+
+{% block title %}Негативные новости РК | {{ site_title }}{% endblock %}
+
+{% block content %}
+<div class="pf">
+
+  <div class="pf-between">
+    <div>
+      <h1 class="font-semibold text-xl text-important">Негативные новости о Казахстане</h1>
+      <div class="pf-muted" style="margin-top:4px">Telegram-каналы, RSS-ленты, Google News и GDELT. Отбор — по ключевым словам негатива и упоминанию Казахстана / регионов.</div>
+    </div>
+    <div class="pf-row">
+      {% for p in periods %}<a class="pf-tab{% if p.active %} active{% endif %}" href="{{ p.url }}">{{ p.label }}</a>{% endfor %}
+    </div>
+  </div>
+
+  {% if sources_err or sources_stale %}
+    <div class="neg-alert">
+      <span class="material-symbols-outlined">warning</span>
+      <span>
+        {% if sources_err %}Источников с ошибкой при последнем чтении: <b>{{ sources_err }}</b>. {% endif %}
+        {% if sources_stale %}Не обновлялись больше 2 недель: <b>{{ sources_stale }}</b>. {% endif %}
+        <a class="text-primary-600 underline" href="{{ sources_url }}">Проверить источники</a>
+      </span>
+    </div>
+  {% endif %}
+
+  <div class="pf-kpis">
+    {% for k in kpi %}
+      <a class="pf-card pf-kpi neg-kpi" href="{{ k.url }}">
+        <span class="material-symbols-outlined">{{ k.icon }}</span>
+        <div><div class="v">{{ k.value }}</div><div class="l">{{ k.title }}</div></div>
+      </a>
+    {% endfor %}
+  </div>
+
+  <div class="pf-grid">
+    <div class="pf-side" style="min-width:0">
+      <div class="pf-card">
+        <div class="pf-between" style="margin-bottom:12px">
+          <div class="pf-h" style="margin:0">Новостей по дням · последние {{ chart_days }} дн.</div>
+          <div class="neg-legend">
+            <span><i class="neg-sw strong"></i>Сильные (балл ≥ {{ strong }})</span>
+            <span><i class="neg-sw rest"></i>Остальные</span>
+          </div>
+        </div>
+        <div class="neg-chart" role="img" aria-label="Количество негативных новостей по дням">
+          <div class="neg-yaxis">
+            <span style="bottom:100%">{{ series_peak }}</span>
+            {% if series_mid %}<span style="bottom:50%">{{ series_mid }}</span>{% endif %}
+            <span style="bottom:0">0</span>
+          </div>
+          <div class="neg-plot">
+            <div class="neg-grid" style="bottom:100%"></div>
+            {% if series_mid %}<div class="neg-grid" style="bottom:50%"></div>{% endif %}
+            {% for x in series %}
+              <div class="neg-col" tabindex="0">
+                <div class="neg-stack" style="height:{{ x.h }}%">
+                  {% if x.rest %}<div class="neg-seg rest" style="flex:{{ x.rest }} 1 0"></div>{% endif %}
+                  {% if x.s %}<div class="neg-seg strong" style="flex:{{ x.s }} 1 0"></div>{% endif %}
+                </div>
+                <div class="neg-tip"><b>{{ x.date|date:"j E, D" }}</b><br>Всего: {{ x.n }}<br>Сильных: {{ x.s }}</div>
+                <div class="neg-x">{% if forloop.first or forloop.last or forloop.counter0|divisibleby:7 %}{{ x.date|date:"d.m" }}{% endif %}</div>
+              </div>
+            {% endfor %}
+          </div>
+        </div>
+        <p class="pf-muted pf-small" style="margin-top:8px">Без новостей, отмеченных «не актуально».{% if no_date %} Ещё {{ no_date }} без даты публикации.{% endif %}</p>
+        <details class="neg-table">
+          <summary class="pf-muted">Показать таблицей</summary>
+          <table><thead><tr><th>Дата</th><th>Всего</th><th>Сильных</th></tr></thead><tbody>
+          {% for x in series reversed %}<tr><td>{{ x.date|date:"d.m.Y" }}</td><td>{{ x.n }}</td><td>{{ x.s }}</td></tr>{% endfor %}
+          </tbody></table>
+        </details>
+      </div>
+
+      <div class="pf-card">
+        <div class="pf-between" style="margin-bottom:6px">
+          <div class="pf-h" style="margin:0">Сильные, ещё не проверены</div>
+          <a class="pf-btn sm" href="{{ list_url }}">Все новости за период →</a>
+        </div>
+        {% for n in latest %}
+          <div class="pf-item">
+            <span class="pf-score{% if n.score >= 80 %} high{% else %} mid{% endif %}" title="Балл">{{ n.score }}</span>
+            <div class="body">
+              <a class="t" href="{% url 'admin:screening_negnews_change' n.pk %}">{{ n.title|default:n.url|truncatechars:160 }}</a>
+              <div class="meta">
+                {{ n.published|date:"d.m.Y H:i"|default:"дата неизвестна" }}{% if n.source %} · {{ n.source }}{% endif %}{% if n.regions %} · {{ n.regions|truncatechars:60 }}{% endif %}{% if n.copies > 1 %} · ещё в {{ n.copies|add:"-1" }} изд.{% endif %}
+              </div>
+              <div class="pf-row chips">
+                {% for c in n.category_list %}<span class="pf-chip blue">{{ c }}</span>{% endfor %}
+              </div>
+              <div class="pf-row actions">
+                <a class="pf-btn sm" href="{% url 'admin:screening_negnews_row_relevant' n.pk %}">Актуально</a>
+                <a class="pf-btn sm" href="{% url 'admin:screening_negnews_row_irrelevant' n.pk %}">Не актуально</a>
+                {% if n.url %}<a class="pf-btn sm" href="{{ n.url }}" target="_blank" rel="noopener">Оригинал ↗</a>{% endif %}
+              </div>
+            </div>
+          </div>
+        {% empty %}
+          <p class="pf-muted" style="padding:12px 0">Непроверенных сильных новостей за период нет.</p>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="pf-side">
+      <div class="pf-card">
+        <div class="pf-h">Выгрузка за период</div>
+        <div class="flex flex-col gap-2">
+          <a class="pf-btn primary" href="{{ export_xlsx }}"><span class="material-symbols-outlined">download</span>Excel — все за {{ days }} дн.</a>
+          <a class="pf-btn" href="{{ export_xlsx_strong }}"><span class="material-symbols-outlined">download</span>Excel — только сильные</a>
+          <a class="pf-btn" href="{{ export_json }}"><span class="material-symbols-outlined">data_object</span>JSON — все за {{ days }} дн.</a>
+        </div>
+        <div class="pf-muted pf-small" style="margin-top:10px">Полный дамп таблиц (новости + источники):
+          <a class="text-primary-600 underline" href="{{ dump_url }}">JSON</a> ·
+          <a class="text-primary-600 underline" href="{{ dump_no_text_url }}">без текстов</a>.
+          Выгрузка по любым фильтрам — в списке «Новости».</div>
+      </div>
+
+      <div class="pf-card">
+        <div class="pf-h">Категории</div>
+        {% for c in categories %}
+          <a class="pf-cat neg-barrow" href="{{ c.url }}">
+            <div class="pf-between"><span>{{ c.name }}</span><b>{{ c.n }}</b></div>
+            <div class="pf-bar"><div style="width:{{ c.pct }}%"></div></div>
+          </a>
+        {% empty %}<p class="pf-muted">Нет данных</p>{% endfor %}
+        <p class="pf-muted pf-small">Одна новость может попасть в несколько категорий</p>
+      </div>
+
+      <div class="pf-card">
+        <div class="pf-h">Регионы</div>
+        {% for c in regions %}
+          <a class="pf-cat neg-barrow" href="{{ c.url }}">
+            <div class="pf-between"><span>{{ c.name }}</span><b>{{ c.n }}</b></div>
+            <div class="pf-bar"><div style="width:{{ c.pct }}%"></div></div>
+          </a>
+        {% empty %}<p class="pf-muted">Нет данных</p>{% endfor %}
+      </div>
+
+      <div class="pf-card">
+        <div class="pf-h">Издания</div>
+        {% for c in sources %}
+          <a class="pf-rel" href="{{ c.url }}"><span>{{ c.name }}</span><span class="pf-muted">{{ c.n }}</span></a>
+        {% empty %}<p class="pf-muted">Нет данных</p>{% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -37,7 +37,7 @@
     <div class="pf-card pf-kpi"><div class="v">{{ stats.max_score|default_if_none:"–" }}</div><div class="l">Максимальный балл</div></div>
     <div class="pf-card pf-kpi"><div class="v">{{ stats.sources }}</div><div class="l">Разных источников</div></div>
     <div class="pf-card pf-kpi">
-      <div class="v period">{% if stats.first %}{{ stats.first|slice:":10" }} — {{ stats.last|slice:":10" }}{% else %}–{% endif %}</div>
+      <div class="v period">{% if stats.first %}{{ stats.first|date:"d.m.Y" }} — {{ stats.last|date:"d.m.Y" }}{% else %}–{% endif %}</div>
       <div class="l">Период упоминаний</div>
     </div>
   </div>
@@ -64,7 +64,7 @@
           <div class="body">
             <a class="t" href="{{ m.url }}" target="_blank" rel="noopener">{{ m.title|default:m.url }}</a>
             <div class="meta">
-              {{ m.published|slice:":10"|default:"дата неизвестна" }}{% if m.source %} · {{ m.source }}{% endif %}{% if m.lang %} · {{ m.lang }}{% endif %}{% if m.in_title %} · <b>имя в заголовке</b>{% endif %}{% if m.matched_text %} · написано как «{{ m.matched_text }}»{% endif %}
+              {{ m.published|date:"d.m.Y"|default:"дата неизвестна" }}{% if m.source %} · {{ m.source }}{% endif %}{% if m.lang %} · {{ m.lang }}{% endif %}{% if m.in_title %} · <b>имя в заголовке</b>{% endif %}{% if m.matched_text %} · написано как «{{ m.matched_text }}»{% endif %}
             </div>
             <div class="pf-row chips">
               {% if m.review_status == "relevant" %}<span class="pf-chip red">Релевантно</span>

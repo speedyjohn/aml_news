@@ -1,6 +1,7 @@
 """
 Запуск команд main.py из панели в фоне. Одновременно выполняется один запуск
-(SQLite не любит нескольких писателей), остальные ждут в очереди.
+(чтобы не упираться в лимиты GDELT / Google News и не гонять сеть параллельно),
+остальные ждут в очереди.
 """
 import os
 import subprocess
@@ -24,7 +25,7 @@ LOG_DIR = Path(settings.MEDIA_ROOT) / "logs"
 
 
 def _steps(job: Job) -> list[list[str]]:
-    base = [sys.executable, "-u", str(MAIN), "--db", str(settings.AML_DB_PATH)]
+    base = [sys.executable, "-u", str(MAIN)]
 
     def collect():
         args = base + ["collect", "--days", str(job.days)]
@@ -53,6 +54,21 @@ def _steps(job: Job) -> list[list[str]]:
             args.append("--keep-weak")
         return args
 
+    def neg_collect():
+        args = base + ["neg-collect", "--days", str(job.days)]
+        flags = [("--telegram", job.use_telegram), ("--rss", job.use_rss),
+                 ("--gnews", job.use_gnews), ("--gdelt", job.use_gdelt)]
+        args += [f for f, on in flags if on]
+        if job.neg_source_id:
+            args += ["--source-id", str(job.neg_source_id)]
+        return args
+
+    neg_pipeline = [neg_collect(), base + ["neg-fetch-text"], base + ["neg-analyze"]]
+
+    if job.command == "neg-pipeline":
+        return neg_pipeline
+    if job.command == "neg-analyze":
+        return [base + ["neg-analyze", "--all"]]
     if job.command == "collect":
         return [collect()]
     if job.command == "fetch-text":
@@ -63,8 +79,11 @@ def _steps(job: Job) -> list[list[str]]:
         return pre + [match()]
     if job.command == "load-names":
         return [load_names()]
+    aml = pre + [collect(), base + ["fetch-text"], match()]
+    if job.command == "both":
+        return aml + neg_pipeline
     # pipeline
-    return pre + [collect(), base + ["fetch-text"], match()]
+    return aml
 
 
 def _execute(job: Job, log_path: Path) -> int:

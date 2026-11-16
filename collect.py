@@ -6,8 +6,10 @@ import html
 import re
 import sys
 import time
+from calendar import timegm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 
 import feedparser
 import requests
@@ -30,18 +32,42 @@ def log(*a):
     print(*a, file=sys.stderr, flush=True)
 
 
+def to_dt(value) -> datetime | None:
+    """Дата из чего угодно (struct_time, ISO, RFC 822, «20261112T101500Z») -> datetime UTC.
+    Нераспознанное -> None (в базу лучше пустая дата, чем мусор)."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, time.struct_time):
+        return datetime.fromtimestamp(timegm(value), timezone.utc)
+    s = str(value).strip()
+    for fmt in ("%Y%m%dT%H%M%SZ", "%Y%m%d%H%M%S"):
+        try:
+            return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except ValueError:
+        pass
+    try:
+        dt = parsedate_to_datetime(s)
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
 # ---------------------------------------------------------------------------
 # GDELT DOC 2.0
 # ---------------------------------------------------------------------------
 GDELT_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
 
 
-def _gdelt_date(s: str | None) -> str | None:
-    # "20261112T101500Z" -> "2026-11-12 10:15:00"
-    try:
-        return datetime.strptime(s, "%Y%m%dT%H%M%SZ").strftime("%Y-%m-%d %H:%M:%S")
-    except Exception:
-        return s
+def _gdelt_date(s: str | None) -> datetime | None:
+    # "20261112T101500Z" -> datetime UTC
+    return to_dt(s)
 
 
 _gdelt_last = 0.0
@@ -151,11 +177,11 @@ def collect_gdelt(conn, days: int = 90, slice_days: int | None = None):
 GNEWS_URL = "https://news.google.com/rss/search"
 
 
-def _parse_date(entry) -> str | None:
+def _parse_date(entry) -> datetime | None:
     t = entry.get("published_parsed") or entry.get("updated_parsed")
     if t:
-        return time.strftime("%Y-%m-%d %H:%M:%S", t)
-    return entry.get("published")
+        return to_dt(t)
+    return to_dt(entry.get("published") or entry.get("updated"))
 
 
 def collect_gnews(conn, days: int = 30):
@@ -224,16 +250,36 @@ def collect_rss(conn):
 # ---------------------------------------------------------------------------
 # Полный текст
 # ---------------------------------------------------------------------------
-def _fetch_one(url: str):
+def fetch_page(url: str, with_meta: bool = False):
+    """Скачивает страницу и достаёт из неё текст статьи.
+    Возвращает (text, status) или, с with_meta, (text, status, meta), где
+    meta — {"title", "date", "sitename"} (что удалось найти)."""
     import trafilatura
+    meta = {}
     try:
         r = session.get(url, timeout=25)
         if r.status_code != 200:
-            return None, f"error: HTTP {r.status_code}"
-        text = trafilatura.extract(r.text, include_comments=False, include_tables=False)
-        return (text, "ok") if text else (None, "empty")
+            res = None, f"error: HTTP {r.status_code}"
+        elif with_meta:
+            doc = trafilatura.bare_extraction(r.text, url=url, include_comments=False,
+                                              include_tables=False, with_metadata=True)
+            if doc is not None and not isinstance(doc, dict):
+                doc = doc.as_dict()
+            doc = doc or {}
+            meta = {"title": doc.get("title"), "date": to_dt(doc.get("date")),
+                    "sitename": doc.get("sitename")}
+            text = doc.get("text")
+            res = (text, "ok") if text else (None, "empty")
+        else:
+            text = trafilatura.extract(r.text, include_comments=False, include_tables=False)
+            res = (text, "ok") if text else (None, "empty")
     except Exception as e:
-        return None, f"error: {type(e).__name__}"
+        res = None, f"error: {type(e).__name__}"
+    return (*res, meta) if with_meta else res
+
+
+def _fetch_one(url: str):
+    return fetch_page(url)
 
 
 def fetch_text(conn, workers: int = 8, limit: int | None = None):
@@ -242,9 +288,10 @@ def fetch_text(conn, workers: int = 8, limit: int | None = None):
     по ним матчинг идёт по заголовку и описанию."""
     rows = conn.execute(
         "SELECT id, url FROM articles WHERE text_status IS NULL "
-        "AND url NOT LIKE 'https://news.google.com/%' ORDER BY id"
+        "AND url NOT LIKE 'https://news.google.com/%%' ORDER BY id"
         + (f" LIMIT {int(limit)}" if limit else "")
     ).fetchall()
+    conn.commit()
     log(f"[text] к загрузке: {len(rows)}")
     done = ok = 0
     with ThreadPoolExecutor(workers) as ex:
@@ -252,11 +299,11 @@ def fetch_text(conn, workers: int = 8, limit: int | None = None):
         for f in as_completed(futs):
             text, status = f.result()
             conn.execute(
-                "UPDATE articles SET text=?, text_status=?, matched_at=NULL WHERE id=?",
+                "UPDATE articles SET text=%s, text_status=%s, matched_at=NULL WHERE id=%s",
                 (text, status, futs[f]),
             )
-            # Коммитим сразу: иначе база остаётся заблокированной на запись,
-            # пока качаются следующие 100 страниц (это минуты), и панель падает.
+            # Коммитим сразу: не держим транзакцию открытой, пока качаются
+            # следующие страницы (это минуты).
             conn.commit()
             done += 1
             ok += status == "ok"
@@ -264,7 +311,7 @@ def fetch_text(conn, workers: int = 8, limit: int | None = None):
                 log(f"[text] {done}/{len(rows)}, с текстом {ok}")
     conn.execute(
         "UPDATE articles SET text_status='skipped' WHERE text_status IS NULL "
-        "AND url LIKE 'https://news.google.com/%'"
+        "AND url LIKE 'https://news.google.com/%%'"
     )
     conn.commit()
     log(f"[text] готово: {done}, с текстом {ok}")
