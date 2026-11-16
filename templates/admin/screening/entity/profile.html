@@ -1,0 +1,130 @@
+{% extends "admin/base_site.html" %}
+{# Профиль получателя: все новости по одному имени. Стили — screening/static/screening/panel.css #}
+
+{% block title %}{{ ent.name }} | {{ site_title }}{% endblock %}
+
+{% block content %}
+<div class="pf">
+
+  <div class="pf-card pf-head">
+    <div>
+      <div class="pf-name">{{ ent.name }}</div>
+      <div class="pf-row" style="margin-top:8px">
+        <span class="pf-chip blue">{{ ent.get_kind_display }}</span>
+        {% if ent.skip_reason %}
+          <span class="pf-chip orange">Не ищется: {{ ent.skip_reason }}</span>
+        {% else %}
+          <span class="pf-chip green">Ищется в новостях</span>
+        {% endif %}
+      </div>
+      {% if variants %}
+        <div class="pf-muted" style="margin-top:10px"><b>Другие написания:</b> {{ variants|join:", " }}</div>
+      {% endif %}
+    </div>
+    <div class="pf-row">
+      {% if stats.total %}
+        <a class="pf-btn primary" href="{{ export_url }}"><span class="material-symbols-outlined">download</span>Excel</a>
+        <a class="pf-btn" href="{{ export_json_url }}"><span class="material-symbols-outlined">data_object</span>JSON</a>
+      {% endif %}
+      <a class="pf-btn" href="{{ details_url }}">Технические данные</a>
+    </div>
+  </div>
+
+  <div class="pf-kpis">
+    <div class="pf-card pf-kpi"><div class="v">{{ stats.total }}</div><div class="l">Новостей с упоминанием</div></div>
+    <div class="pf-card pf-kpi"><div class="v red">{{ stats.relevant }}</div><div class="l">Релевантных</div></div>
+    <div class="pf-card pf-kpi"><div class="v orange">{{ stats.new }}</div><div class="l">Не проверено</div></div>
+    <div class="pf-card pf-kpi"><div class="v">{{ stats.max_score|default_if_none:"–" }}</div><div class="l">Максимальный балл</div></div>
+    <div class="pf-card pf-kpi"><div class="v">{{ stats.sources }}</div><div class="l">Разных источников</div></div>
+    <div class="pf-card pf-kpi">
+      <div class="v period">{% if stats.first %}{{ stats.first|slice:":10" }} — {{ stats.last|slice:":10" }}{% else %}–{% endif %}</div>
+      <div class="l">Период упоминаний</div>
+    </div>
+  </div>
+
+  <div class="pf-grid">
+    <div class="pf-card">
+      <div class="pf-between" style="margin-bottom:6px">
+        <div class="pf-row">
+          {% for t in tabs %}
+            <a class="pf-tab{% if t.active %} active{% endif %}" href="{{ t.url }}">{{ t.label }} · {{ t.n }}</a>
+          {% endfor %}
+        </div>
+        <div class="pf-row">
+          <span class="pf-muted">Сортировка:</span>
+          <a class="pf-tab{% if order != 'score' %} active{% endif %}" href="{{ order_date_url }}">по дате</a>
+          <a class="pf-tab{% if order == 'score' %} active{% endif %}" href="{{ order_score_url }}">по баллу</a>
+        </div>
+      </div>
+
+      {% for r in rows %}
+        {% with m=r.m %}
+        <div class="pf-item">
+          <span class="pf-score{% if m.score >= 80 %} high{% elif m.score >= 60 %} mid{% endif %}" title="Балл">{{ m.score }}</span>
+          <div class="body">
+            <a class="t" href="{{ m.url }}" target="_blank" rel="noopener">{{ m.title|default:m.url }}</a>
+            <div class="meta">
+              {{ m.published|slice:":10"|default:"дата неизвестна" }}{% if m.source %} · {{ m.source }}{% endif %}{% if m.lang %} · {{ m.lang }}{% endif %}{% if m.in_title %} · <b>имя в заголовке</b>{% endif %}{% if m.matched_text %} · написано как «{{ m.matched_text }}»{% endif %}
+            </div>
+            <div class="pf-row chips">
+              {% if m.review_status == "relevant" %}<span class="pf-chip red">Релевантно</span>
+              {% elif m.review_status == "false_positive" %}<span class="pf-chip gray">Ложное срабатывание</span>
+              {% else %}<span class="pf-chip orange">Не проверено</span>{% endif %}
+              {% for c in r.cats %}<span class="pf-chip blue">{{ c }}</span>{% endfor %}
+            </div>
+            <div class="snip">{{ r.snippet }}</div>
+            {% if m.review_note %}<div class="pf-muted" style="margin-top:6px"><b>Комментарий:</b> {{ m.review_note }}</div>{% endif %}
+            <div class="pf-row actions">
+              {% if m.review_status != "relevant" %}<a class="pf-btn sm" href="{% url 'admin:screening_match_row_relevant' m.pk %}">Релевантно</a>{% endif %}
+              {% if m.review_status != "false_positive" %}<a class="pf-btn sm" href="{% url 'admin:screening_match_row_false' m.pk %}">Ложное</a>{% endif %}
+              <a class="pf-btn sm" href="{% url 'admin:screening_match_change' m.pk %}">Подробнее / комментарий</a>
+              <a class="pf-btn sm" href="{% url 'admin:screening_article_change' m.article_id %}">Новость в базе</a>
+            </div>
+          </div>
+        </div>
+        {% endwith %}
+      {% empty %}
+        <p class="pf-muted" style="padding:16px 0">
+          {% if stats.total %}В этой вкладке ничего нет.{% elif ent.skip_reason %}Имя не ищется в новостях ({{ ent.skip_reason }}).{% else %}Упоминаний в собранных новостях пока не найдено.{% endif %}
+        </p>
+      {% endfor %}
+
+      {% if page.paginator.num_pages > 1 %}
+        <div class="pf-pager">
+          <span>{% if prev_url %}<a class="pf-btn sm" href="{{ prev_url }}">← Назад</a>{% endif %}</span>
+          <span class="pf-muted">Страница {{ page.number }} из {{ page.paginator.num_pages }}</span>
+          <span>{% if next_url %}<a class="pf-btn sm" href="{{ next_url }}">Дальше →</a>{% endif %}</span>
+        </div>
+      {% endif %}
+    </div>
+
+    <div class="pf-side">
+      <div class="pf-card">
+        <div class="pf-h">Категории нарушений</div>
+        {% for c in categories %}
+          <div class="pf-cat">
+            <div class="pf-between"><span>{{ c.name }}</span><b>{{ c.n }}</b></div>
+            <div class="pf-bar"><div style="width:{{ c.pct }}%"></div></div>
+          </div>
+        {% empty %}
+          <p class="pf-muted">Нет данных</p>
+        {% endfor %}
+        <p class="pf-muted pf-small">Без учёта ложных срабатываний</p>
+      </div>
+
+      <div class="pf-card">
+        <div class="pf-h">Упоминаются в тех же новостях</div>
+        {% for r in related %}
+          <div class="pf-rel">
+            <a href="{% url 'admin:screening_entity_change' r.entity_id %}">{{ r.entity_name }}</a>
+            <span class="pf-muted" title="Общих новостей">{{ r.n }}</span>
+          </div>
+        {% empty %}
+          <p class="pf-muted">Никого</p>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}

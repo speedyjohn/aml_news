@@ -1,0 +1,110 @@
+{% extends 'admin/base.html' %}
+{% load i18n unfold %}
+
+{% block title %}Обзор | {{ site_title }}{% endblock %}
+
+{% block branding %}
+    {% include "unfold/helpers/site_branding.html" %}
+{% endblock %}
+
+{% block content %}
+<div class="flex flex-col gap-6">
+
+  <div class="flex flex-row flex-wrap items-center gap-3">
+    <h1 class="font-semibold text-xl text-important grow">Обзор</h1>
+    <a href="{{ jobs_url }}" class="border border-base-200 dark:border-base-700 font-medium px-3 py-2 rounded-default text-sm">Запуски</a>
+    <a href="{{ new_job_url }}" class="bg-primary-600 font-medium px-3 py-2 rounded-default text-sm text-white">Новый запуск</a>
+  </div>
+
+  <div class="grid gap-4 grid-cols-1 md:grid-cols-3 xl:grid-cols-6">
+    {% for k in kpi %}
+      {% component "unfold/components/card.html" with href=k.url size="md" %}
+        <div class="flex flex-row items-center gap-3">
+          <span class="material-symbols-outlined text-primary-600">{{ k.icon }}</span>
+          <div>
+            <div class="text-subtle text-xs">{{ k.title }}</div>
+            <div class="font-semibold text-2xl text-important">{{ k.value }}</div>
+          </div>
+        </div>
+      {% endcomponent %}
+    {% endfor %}
+  </div>
+
+  <div class="grid gap-4 grid-cols-1 xl:grid-cols-3">
+    <div class="xl:col-span-2">
+      {% component "unfold/components/card.html" with title="Сильные непроверенные совпадения" %}
+        {% if top_matches %}
+          <table class="w-full text-sm">
+            <thead><tr class="text-left text-subtle">
+              <th class="pb-2 pr-3">Балл</th><th class="pb-2 pr-3">Имя</th><th class="pb-2 pr-3">Новость</th><th class="pb-2">Категории</th>
+            </tr></thead>
+            <tbody>
+            {% for m in top_matches %}
+              <tr class="border-t border-base-200 dark:border-base-800">
+                <td class="py-2 pr-3 font-semibold {% if m.score >= 80 %}text-red-600{% elif m.score >= 60 %}text-orange-600{% endif %}">{{ m.score }}</td>
+                <td class="py-2 pr-3"><a class="font-medium" href="{% url 'admin:screening_match_change' m.pk %}">{{ m.entity_name }}</a><div class="text-xs"><a class="text-primary-600" href="{% url 'admin:screening_entity_change' m.entity_id %}">профиль</a></div></td>
+                <td class="py-2 pr-3"><a class="text-primary-600 underline" href="{{ m.url }}" target="_blank" rel="noopener">{{ m.title|default:m.url|truncatechars:80 }}</a><div class="text-subtle text-xs">{{ m.source|default:"" }}{% if m.published %} · {{ m.published|slice:":10" }}{% endif %}</div></td>
+                <td class="py-2 text-xs">{{ m.categories|truncatechars:60 }}</td>
+              </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <p class="text-subtle">Пока нет совпадений. Загрузите список и запустите полный цикл в разделе «Запуски».</p>
+        {% endif %}
+      {% endcomponent %}
+    </div>
+
+    <div class="flex flex-col gap-4">
+      {% component "unfold/components/card.html" with title="Категории (балл ≥ 60)" %}
+        {% for c in categories %}
+          <a href="{{ c.url }}" class="block mb-3">
+            <div class="flex justify-between text-sm"><span>{{ c.name }}</span><span class="font-semibold">{{ c.n }}</span></div>
+            <div class="bg-base-100 dark:bg-base-800 h-2 mt-1 rounded-full"><div class="bg-primary-600 h-2 rounded-full" style="width: {{ c.pct }}%"></div></div>
+          </a>
+        {% empty %}
+          <p class="text-subtle">Нет данных</p>
+        {% endfor %}
+      {% endcomponent %}
+
+      {% component "unfold/components/card.html" with title="Автозапуск" %}
+        {% if schedule and schedule.enabled %}
+          <p class="text-sm">Включён: каждые <b>{{ schedule.every_hours }} ч</b> — {{ schedule.get_command_display|lower }}.</p>
+          <p class="text-subtle text-xs mt-1">Последний: {{ schedule.last_run_at|default:"ещё не было" }}. Работает, пока открыта панель.</p>
+        {% else %}
+          <p class="text-sm text-subtle">Выключен.</p>
+        {% endif %}
+        <a href="{{ schedule_url }}" class="inline-block mt-3 text-primary-600 text-sm underline">Настроить</a>
+      {% endcomponent %}
+
+      {% component "unfold/components/card.html" with title="Последние запуски" %}
+        {% for j in last_jobs %}
+          <a href="{% url 'admin:screening_job_change' j.pk %}" class="flex justify-between py-1 text-sm">
+            <span>#{{ j.pk }} {{ j.get_command_display }}</span>
+            <span class="{% if j.status == 'done' %}text-green-600{% elif j.status == 'failed' or j.status == 'interrupted' %}text-red-600{% elif j.status == 'running' %}text-primary-600{% else %}text-subtle{% endif %}">{{ j.get_status_display }}</span>
+          </a>
+        {% empty %}
+          <p class="text-subtle">Запусков ещё не было</p>
+        {% endfor %}
+      {% endcomponent %}
+
+      {% component "unfold/components/card.html" with title="Выгрузка данных" %}
+        <p class="text-sm">Вся база одним файлом JSON: список получателей, новости и совпадения.</p>
+        <div class="flex flex-col gap-1 mt-3 text-sm">
+          <a href="{{ dump_url }}" class="text-primary-600 underline">Скачать полный дамп</a>
+          <a href="{{ dump_no_text_url }}" class="text-primary-600 underline">Скачать без полных текстов статей</a>
+        </div>
+        <p class="text-subtle text-xs mt-2">Excel-выгрузки — в разделах «Совпадения» и «Список получателей».</p>
+      {% endcomponent %}
+
+      {% component "unfold/components/card.html" with title="Новости по источникам" %}
+        {% for s in sources %}
+          <div class="flex justify-between py-1 text-sm"><span>{{ s.collector|default:"—" }}</span><span class="font-semibold">{{ s.n }}</span></div>
+        {% empty %}
+          <p class="text-subtle">Новостей пока нет</p>
+        {% endfor %}
+      {% endcomponent %}
+    </div>
+  </div>
+</div>
+{% endblock %}

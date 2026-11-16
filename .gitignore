@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+
+# база, загруженные списки, логи запусков, выгрузки
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+panel_files/
+*.xlsx
+*.json

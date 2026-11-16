@@ -1,0 +1,9 @@
+pandas
+openpyxl
+requests
+feedparser
+pyahocorasick
+trafilatura
+# админ-панель (Python 3.11+; unfold 0.91 — последняя версия, поддерживающая 3.11)
+django>=5.2,<6
+django-unfold==0.91.0
