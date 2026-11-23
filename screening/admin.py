@@ -581,14 +581,15 @@ class JobAdmin(ModelAdmin):
     list_display = ("id", "command", "status_badge", "trigger", "created_at", "started_at",
                     "finished_at", "duration")
     list_display_links = ("id", "command")
-    actions_list = ["run_pipeline", "run_collect", "run_fetch", "run_match"]
+    actions_list = ["run_pipeline", "run_collect", "run_telegram", "run_fetch", "run_match"]
     actions_detail = ["stop_job", "rerun_job"]
     warn_unsaved_form = True
 
     add_fieldsets = (
         (None, {"fields": ("command",)}),
         # классы job-* — по ним panel.css прячет блоки, не относящиеся к выбранной команде
-        ("Сбор новостей", {"fields": ("use_gdelt", "use_gnews", "use_rss", "days", "slice_days"),
+        ("Сбор новостей", {"fields": ("use_gdelt", "use_gnews", "use_rss", "use_telegram",
+                                      "days", "slice_days"),
                            "classes": ["job-collect"]}),
         ("Матчинг", {"fields": ("match_all", "keep_weak"), "classes": ["job-match"]}),
         ("Загрузка списка", {"fields": ("names_file", "names_column"),
@@ -604,7 +605,7 @@ class JobAdmin(ModelAdmin):
         return (
             (None, {"fields": ("command", "status_text", "trigger", "created_at", "started_at",
                                "finished_at", "returncode")}),
-            ("Параметры", {"fields": ("use_gdelt", "use_gnews", "use_rss", "days",
+            ("Параметры", {"fields": ("use_gdelt", "use_gnews", "use_rss", "use_telegram", "days",
                                       "slice_days", "match_all", "keep_weak", "names_file_name",
                                       "names_column"), "classes": ["collapse"]}),
             ("Лог", {"fields": ("log_view",)}),
@@ -690,6 +691,11 @@ class JobAdmin(ModelAdmin):
     def run_collect(self, request):
         return self._quick_job(request, command="collect")
 
+    @action(description="Только Telegram", icon="send")
+    def run_telegram(self, request):
+        return self._quick_job(request, command="collect", use_gdelt=False, use_gnews=False,
+                               use_rss=False, use_telegram=True, days=7)
+
     @action(description="Докачать тексты", icon="download")
     def run_fetch(self, request):
         return self._quick_job(request, command="fetch-text")
@@ -732,7 +738,8 @@ class JobAdmin(ModelAdmin):
 class ScheduleAdmin(ModelAdmin):
     fieldsets = (
         (None, {"fields": ("enabled", "every_hours", "command", "next_run_view")}),
-        ("Сбор новостей", {"fields": ("use_gdelt", "use_gnews", "use_rss", "days")}),
+        ("Сбор новостей", {"fields": ("use_gdelt", "use_gnews", "use_rss", "use_telegram",
+                                      "days")}),
         ("История", {"fields": ("last_run_at", "last_job_link")}),
     )
     readonly_fields = ("next_run_view", "last_run_at", "last_job_link")
@@ -774,3 +781,7 @@ class ScheduleAdmin(ModelAdmin):
         url = reverse("admin:screening_job_change", args=[obj.last_job_id])
         return format_html('<a href="{}" class="text-primary-600 underline">#{} — {}</a>',
                            url, obj.last_job_id, obj.last_job.get_status_display())
+
+
+# Telegram-каналы и аккаунт — в отдельном модуле, чтобы этот файл не разрастался
+from . import admin_telegram  # noqa: E402,F401

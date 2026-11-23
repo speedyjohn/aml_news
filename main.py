@@ -3,7 +3,7 @@
 Adverse media скрининг: собираем новости о нарушениях и ищем в них имена из списка.
 
   python main.py load-names список.xlsx
-  python main.py collect --gdelt --gnews --rss
+  python main.py collect --gdelt --gnews --rss --telegram
   python main.py fetch-text
   python main.py match
   python main.py export matches.xlsx --min-score 60
@@ -30,6 +30,8 @@ def main():
     s.add_argument("--gdelt", action="store_true", help="GDELT (международные + KZ)")
     s.add_argument("--gnews", action="store_true", help="Google News RSS")
     s.add_argument("--rss", action="store_true", help="RSS-ленты из config.RSS_FEEDS")
+    s.add_argument("--telegram", action="store_true",
+                   help="Telegram-каналы из панели (Telegram → Каналы)")
     s.add_argument("--days", type=int, default=90, help="за сколько дней (GDELT до ~90, gnews ~30)")
     s.add_argument("--slice-days", type=int, help="резать период GDELT на окна (обходит лимит 250)")
 
@@ -69,13 +71,16 @@ def main():
 
     elif a.cmd == "collect":
         import collect
-        if not (a.gdelt or a.gnews or a.rss):
-            a.gdelt = a.gnews = a.rss = True
+        if not (a.gdelt or a.gnews or a.rss or a.telegram):
+            a.gdelt = a.gnews = a.rss = a.telegram = True
         # быстрые источники сначала, медленный GDELT — в конце
         if a.gnews:
             print("Google News, новых статей:", collect.collect_gnews(conn, min(a.days, 30)))
         if a.rss:
             print("RSS, новых статей:", collect.collect_rss(conn))
+        if a.telegram:
+            import tg_collect
+            print("Telegram, новых постов:", tg_collect.collect_telegram(conn, a.days))
         if a.gdelt:
             print("GDELT, новых статей:", collect.collect_gdelt(conn, a.days, a.slice_days))
 

@@ -1,0 +1,59 @@
+{% extends "admin/base_site.html" %}
+{# Загрузка списка Telegram-каналов файлом или текстом. Стили — screening/static/screening/panel.css #}
+
+{% block title %}{{ title }} | {{ site_title }}{% endblock %}
+
+{% block content %}
+<div class="pf">
+
+  <div class="pf-card pf-between">
+    <div>
+      <div class="pf-name">Загрузить список Telegram-каналов</div>
+      <div class="pf-muted" style="margin-top:6px">
+        Подойдут ссылки <b>t.me/канал</b>, <b>@канал</b>, инвайт-ссылки <b>t.me/+…</b> и <b>t.me/c/…</b>.
+        Повторы и уже добавленные каналы пропускаются.
+      </div>
+    </div>
+    <div class="pf-row">
+      <a class="pf-btn" href="{{ list_url }}"><span class="material-symbols-outlined">list</span>К списку каналов</a>
+      <a class="pf-btn" href="{{ account_url }}"><span class="material-symbols-outlined">account_circle</span>Аккаунт</a>
+    </div>
+  </div>
+
+  {% if result %}
+    <div class="pf-card">
+      <div class="pf-h">Результат</div>
+      <div class="pf-row">
+        <span class="pf-chip green">Добавлено: {{ result.added|length }}</span>
+        <span class="pf-chip gray">Уже были: {{ result.skipped|length }}</span>
+        {% if result.bad_total %}<span class="pf-chip orange">Не распознано: {{ result.bad_total }}</span>{% endif %}
+        {% if result.private %}<span class="pf-chip blue">Закрытых: {{ result.private }}</span>{% endif %}
+      </div>
+      {% if result.private %}
+        <div class="pf-muted" style="margin-top:10px">
+          Закрытые каналы читаются только через подключённый аккаунт —
+          <a class="text-primary-600 underline" href="{{ account_url }}">подключить</a>.
+        </div>
+      {% endif %}
+      {% if result.added %}
+        <div class="pf-muted" style="margin-top:10px"><b>Добавлены:</b> {{ result.added|join:", " }}</div>
+      {% endif %}
+      {% if result.bad %}
+        <div class="pf-muted" style="margin-top:10px"><b>Не похоже на канал:</b> {{ result.bad|join:", " }}{% if result.bad_total > result.bad|length %} …{% endif %}</div>
+      {% endif %}
+    </div>
+  {% endif %}
+
+  <form method="post" enctype="multipart/form-data" class="pf-card" id="tg_upload_form">
+    {% csrf_token %}
+    {% if form.non_field_errors %}
+      <div class="text-red-600" style="margin-bottom:12px">{{ form.non_field_errors|join:" " }}</div>
+    {% endif %}
+    {% for field in form %}
+      {% include "unfold/helpers/field.html" with field=field %}
+    {% endfor %}
+    <button type="submit" class="pf-btn primary"><span class="material-symbols-outlined">upload</span>Загрузить</button>
+  </form>
+
+</div>
+{% endblock %}

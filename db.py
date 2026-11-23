@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS articles (
     published    TEXT,
     lang         TEXT,
     country      TEXT,
-    collector    TEXT,                    -- gdelt | gnews | rss
+    collector    TEXT,                    -- gdelt | gnews | rss | telegram
     query        TEXT,                    -- по какому запросу нашли
     summary      TEXT,
     text         TEXT,                    -- полный текст, если скачан

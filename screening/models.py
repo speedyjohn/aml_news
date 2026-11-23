@@ -107,6 +107,7 @@ class Job(models.Model):
     use_gdelt = models.BooleanField("GDELT", default=True)
     use_gnews = models.BooleanField("Google News", default=True)
     use_rss = models.BooleanField("RSS-ленты", default=True)
+    use_telegram = models.BooleanField("Telegram-каналы", default=True)
     days = models.PositiveIntegerField("За сколько дней", default=90,
                                        help_text="GDELT хранит ~90 дней, Google News — ~30")
     slice_days = models.PositiveIntegerField(
@@ -140,7 +141,7 @@ class Job(models.Model):
         if self.command == "load-names" and not self.names_file:
             raise ValidationError({"names_file": "Для загрузки списка нужен файл"})
         if self.command in ("collect", "pipeline"):
-            if not (self.use_gdelt or self.use_gnews or self.use_rss):
+            if not (self.use_gdelt or self.use_gnews or self.use_rss or self.use_telegram):
                 raise ValidationError("Выберите хотя бы один источник")
             if not self.days:
                 raise ValidationError({"days": "Укажите хотя бы 1 день"})
@@ -158,6 +159,7 @@ class Schedule(models.Model):
     use_gdelt = models.BooleanField("GDELT", default=True)
     use_gnews = models.BooleanField("Google News", default=True)
     use_rss = models.BooleanField("RSS-ленты", default=True)
+    use_telegram = models.BooleanField("Telegram-каналы", default=True)
     days = models.PositiveIntegerField(
         "Собирать новости за (дней)", default=3,
         help_text="Для ежедневного запуска хватит 2–3 дней: старое уже в базе")
@@ -178,3 +180,92 @@ class Schedule(models.Model):
         if not self.last_run_at:
             return timezone.now()
         return self.last_run_at + timedelta(hours=max(self.every_hours, 1))
+
+
+class TgChannel(models.Model):
+    """Telegram-канал, из которого собираются посты (см. tg_collect.py)."""
+    METHODS = [("auto", "Авто: веб-версия, если её нет — через аккаунт"),
+               ("web", "Только веб-версия t.me/s (без аккаунта)"),
+               ("account", "Только через подключённый аккаунт")]
+
+    ref = models.CharField("Канал", max_length=200, unique=True,
+                           help_text="@username, ссылка t.me/…, инвайт t.me/+… или t.me/c/…")
+    username = models.CharField("Имя канала", max_length=64, blank=True)
+    invite_hash = models.CharField("Инвайт", max_length=100, blank=True)
+    channel_id = models.BigIntegerField("ID канала", null=True, blank=True)
+    title = models.CharField("Название", max_length=300, blank=True)
+    method = models.CharField("Как читать", max_length=10, choices=METHODS, default="auto")
+    is_active = models.BooleanField("Собирать", default=True)
+    note = models.CharField("Заметка", max_length=300, blank=True)
+
+    last_post_id = models.BigIntegerField("Последний пост", null=True, blank=True)
+    last_post_at = models.DateTimeField("Дата последнего поста", null=True, blank=True)
+    last_checked_at = models.DateTimeField("Проверен", null=True, blank=True)
+    last_via = models.CharField("Прочитан через", max_length=10, blank=True)
+    last_error = models.TextField("Ошибка", blank=True)
+    posts_saved = models.PositiveIntegerField("Сохранено постов", default=0)
+    created_at = models.DateTimeField("Добавлен", auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Telegram-канал"
+        verbose_name_plural = "Telegram-каналы"
+        ordering = ["-is_active", "title", "ref"]
+
+    def __str__(self):
+        return self.title or self.display_ref
+
+    @property
+    def is_private(self) -> bool:
+        return not self.username
+
+    @property
+    def display_ref(self) -> str:
+        if self.username:
+            return "@" + self.username
+        if self.invite_hash:
+            return "t.me/+" + self.invite_hash
+        return f"t.me/c/{self.channel_id}"
+
+    @property
+    def link(self) -> str:
+        if self.username:
+            return f"https://t.me/{self.username}"
+        if self.invite_hash:
+            return f"https://t.me/+{self.invite_hash}"
+        return f"https://t.me/c/{self.channel_id}/999999999"
+
+
+class TgAccount(models.Model):
+    """Подключённый Telegram-аккаунт (юзербот) для закрытых каналов. Одна запись."""
+    STATUSES = [("off", "Не подключён"), ("code_sent", "Ждёт код из Telegram"),
+                ("password", "Ждёт пароль двухэтапной проверки"),
+                ("connected", "Подключён"), ("error", "Ошибка — подключите заново")]
+
+    api_id = models.PositiveIntegerField("api_id", null=True, blank=True,
+                                         help_text="Число с my.telegram.org → API development tools")
+    api_hash = models.CharField("api_hash", max_length=64, blank=True,
+                                help_text="Строка из 32 символов оттуда же")
+    phone = models.CharField("Номер телефона", max_length=32, blank=True,
+                             help_text="В международном формате: +77001234567")
+    auto_join = models.BooleanField(
+        "Вступать в каналы по инвайт-ссылкам", default=False,
+        help_text="Если аккаунт ещё не состоит в канале из списка — вступить автоматически")
+
+    status = models.CharField("Статус", max_length=20, choices=STATUSES, default="off")
+    # Строка сессии Telethon: даёт полный доступ к аккаунту, наружу не показывается
+    session = models.TextField(blank=True)
+    phone_code_hash = models.CharField(max_length=100, blank=True)
+    me = models.CharField("Аккаунт", max_length=200, blank=True)
+    connected_at = models.DateTimeField("Подключён", null=True, blank=True)
+    last_error = models.TextField("Последняя ошибка", blank=True)
+
+    class Meta:
+        verbose_name = "Telegram-аккаунт"
+        verbose_name_plural = "Telegram-аккаунт"
+
+    def __str__(self):
+        return self.me or "Telegram-аккаунт"
+
+    @property
+    def has_credentials(self) -> bool:
+        return bool(self.api_id and self.api_hash and self.phone)

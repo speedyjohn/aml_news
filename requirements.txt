@@ -7,3 +7,6 @@ trafilatura
 # админ-панель (Python 3.11+; unfold 0.91 — последняя версия, поддерживающая 3.11)
 django>=5.2,<6
 django-unfold==0.91.0
+# Telegram: веб-версия t.me/s разбирается через lxml, закрытые каналы — через Telethon
+lxml
+telethon>=1.40

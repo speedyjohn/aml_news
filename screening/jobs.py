@@ -34,6 +34,8 @@ def _steps(job: Job) -> list[list[str]]:
             args.append("--gnews")
         if job.use_rss:
             args.append("--rss")
+        if job.use_telegram:
+            args.append("--telegram")
         if job.slice_days:
             args += ["--slice-days", str(job.slice_days)]
         return args

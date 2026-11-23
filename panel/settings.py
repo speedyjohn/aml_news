@@ -133,6 +133,15 @@ UNFOLD = {
                 ],
             },
             {
+                "title": "Telegram",
+                "items": [
+                    {"title": "Каналы", "icon": "forum",
+                     "link": reverse_lazy("admin:screening_tgchannel_changelist")},
+                    {"title": "Аккаунт (закрытые каналы)", "icon": "account_circle",
+                     "link": reverse_lazy("admin:screening_tgaccount_changelist")},
+                ],
+            },
+            {
                 "title": "Управление",
                 "items": [
                     {"title": "Запуски", "icon": "play_circle",
