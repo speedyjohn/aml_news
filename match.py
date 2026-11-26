@@ -48,19 +48,19 @@ def load_names(conn, path: str, column: str | None = None) -> dict:
             g["variants"].append(name)
 
     existing = {(r["kind"], r["core"]) for r in conn.execute("SELECT kind, core FROM entities")}
-    new = 0
+    rows = []
     for key, g in groups.items():
         if key in existing:
             continue
         e = g["e"]
-        conn.execute(
+        rows.append((e.name, " | ".join(g["variants"]) or None, e.kind, e.core, e.pattern,
+                     " ".join(e.tokens), e.skip_reason))
+    with conn.cursor() as cur:
+        cur.executemany(
             "INSERT INTO entities (name, variants, kind, core, pattern, tokens, skip_reason) "
-            "VALUES (?,?,?,?,?,?,?)",
-            (e.name, " | ".join(g["variants"]) or None, e.kind, e.core, e.pattern,
-             " ".join(e.tokens), e.skip_reason),
-        )
-        new += 1
+            "VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (kind, core) DO NOTHING", rows)
     conn.commit()
+    new = len(rows)
 
     stats = {"строк в файле (уникальных)": len(raw), "сущностей после склейки": len(groups),
              "новых добавлено": new}
@@ -219,7 +219,7 @@ UPSERT = """
 INSERT INTO matches (entity_id, article_id, entity_name, entity_kind, source, title, url,
                      published, lang, matched_text, categories, keywords, in_title, score,
                      score_raw, snippet, created_at)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
 ON CONFLICT(entity_id, article_id) DO UPDATE SET
     matched_text=excluded.matched_text, categories=excluded.categories,
     keywords=excluded.keywords, in_title=excluded.in_title, score=excluded.score,
@@ -231,10 +231,9 @@ def _stale_match_ids(conn, article_ids: list, found: set) -> list:
     """Старые совпадения по этим статьям, которые при новой проверке не нашлись
     (изменился список, ключевые слова или настройки). Уже проверенные вручную
     и с комментарием не трогаем."""
-    marks = ",".join("?" * len(article_ids))
     rows = conn.execute(
-        f"SELECT id, entity_id, article_id FROM matches WHERE article_id IN ({marks}) "
-        "AND review_status = 'new' AND COALESCE(review_note, '') = ''", article_ids)
+        "SELECT id, entity_id, article_id FROM matches WHERE article_id = ANY(%s) "
+        "AND review_status = 'new' AND COALESCE(review_note, '') = ''", (article_ids,))
     return [(r["id"],) for r in rows if (r["entity_id"], r["article_id"]) not in found]
 
 
@@ -247,8 +246,8 @@ def run_match(conn, all_articles: bool = False, keep_weak: bool = False, batch: 
     last_id = 0
     while True:
         rows = conn.execute(
-            f"SELECT * FROM articles {where} {'AND' if where else 'WHERE'} id > ? "
-            f"ORDER BY id LIMIT ?", (last_id, batch)).fetchall()
+            f"SELECT * FROM articles {where} {'AND' if where else 'WHERE'} id > %s "
+            f"ORDER BY id LIMIT %s", (last_id, batch)).fetchall()
         if not rows:
             break
         ts = now()
@@ -266,12 +265,13 @@ def run_match(conn, all_articles: bool = False, keep_weak: bool = False, batch: 
                 upserts.append((
                     h.ent.id, a["id"], h.ent.name, h.ent.kind, a["source"], title, a["url"],
                     a["published"], a["lang"], matched, "; ".join(h.cats), "; ".join(h.kws),
-                    int(h.in_title), h.score, h.score, snip, ts))
+                    bool(h.in_title), h.score, h.score, snip, ts))
             processed.append((ts, a["id"]))
         stale = _stale_match_ids(conn, [a["id"] for a in rows], {(u[0], u[1]) for u in upserts})
-        conn.executemany("DELETE FROM matches WHERE id=?", stale)
-        conn.executemany(UPSERT, upserts)
-        conn.executemany("UPDATE articles SET matched_at=? WHERE id=?", processed)
+        with conn.cursor() as cur:
+            cur.executemany("DELETE FROM matches WHERE id=%s", stale)
+            cur.executemany(UPSERT, upserts)
+            cur.executemany("UPDATE articles SET matched_at=%s WHERE id=%s", processed)
         conn.commit()
         found += len(upserts)
         removed += len(stale)
@@ -288,9 +288,9 @@ def mark_frequent(conn):
     n, pen = config.FREQUENT_ENTITY_ARTICLES, config.FREQUENT_PENALTY
     conn.execute("""
         UPDATE matches SET frequent = (entity_id IN (
-            SELECT entity_id FROM matches GROUP BY entity_id HAVING COUNT(*) >= ?))""", (n,))
-    conn.execute("UPDATE matches SET score = MAX(score_raw - CASE WHEN frequent THEN ? ELSE 0 END, 0)",
-                 (pen,))
+            SELECT entity_id FROM matches GROUP BY entity_id HAVING COUNT(*) >= %s))""", (n,))
+    conn.execute("UPDATE matches SET score = GREATEST(score_raw - CASE WHEN frequent THEN %s "
+                 "ELSE 0 END, 0)", (pen,))
     conn.commit()
     k = conn.execute("SELECT COUNT(DISTINCT entity_id) FROM matches WHERE frequent").fetchone()[0]
     if k:

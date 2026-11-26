@@ -9,3 +9,5 @@ __pycache__/
 panel_files/
 *.xlsx
 *.json
+# адрес и пароль базы PostgreSQL
+.env

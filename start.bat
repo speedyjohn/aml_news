@@ -16,8 +16,19 @@ call .venv\Scripts\activate.bat
 pip install -q -r requirements.txt
 if errorlevel 1 ( pause & exit /b 1 )
 
+rem База PostgreSQL: при первом запуске создаём пользователя и базу, адрес пишем в .env
+if not exist .env (
+    python setup_postgres.py
+    if errorlevel 1 ( pause & exit /b 1 )
+)
+
 python manage.py migrate -v0
-if errorlevel 1 ( pause & exit /b 1 )
+if errorlevel 1 (
+    echo Не удалось подключиться к базе. Проверьте, что PostgreSQL запущен, и адрес в файле .env
+    pause & exit /b 1
+)
+rem Один раз переносим данные из старой базы aml_news.sqlite, если она есть
+python manage.py import_sqlite --auto
 python manage.py ensure_admin
 
 echo.

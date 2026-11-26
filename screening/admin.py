@@ -1,4 +1,5 @@
-"""Админ-панель: совпадения, новости, список получателей (с профилем), запуски, автозапуск."""
+"""Админ-панель: совпадения, новости, список получателей (с профилем), запуски, автозапуск.
+Негативные новости о Казахстане — в neg_admin.py."""
 import io
 import os
 import re
@@ -109,6 +110,8 @@ def _highlight(snippet: str | None, needle: str | None):
 
 
 def _xlsx_response(df: pd.DataFrame, filename: str) -> HttpResponse:
+    from export import naive_local
+    df = naive_local(df)        # Excel не понимает даты с часовым поясом
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as xw:
         df.to_excel(xw, index=False, sheet_name="Лист1")
@@ -135,6 +138,10 @@ def _filtered_queryset(model_admin, request):
         return cl.get_queryset(request)
     finally:
         request.GET = orig
+
+
+def _local_date(dt, fmt="d.m.Y"):
+    return date_format(timezone.localtime(dt), fmt) if dt else ""
 
 
 def _ext_link(url, text=None):
@@ -215,7 +222,7 @@ class MatchAdmin(ModelAdmin):
     def news_cell(self, obj):
         t = obj.title or obj.url or ""
         t = t[:110] + "…" if len(t) > 110 else t
-        meta = " · ".join(x for x in (obj.source, (obj.published or "")[:10]) if x)
+        meta = " · ".join(x for x in (obj.source, _local_date(obj.published)) if x)
         return format_html('<div style="min-width:260px;max-width:420px">'
                            '<a href="{}" target="_blank" rel="noopener" class="text-primary-600 '
                            'hover:underline">{}</a><div class="text-subtle text-xs mt-0.5">{}</div>'
@@ -378,7 +385,7 @@ class ArticleAdmin(ModelAdmin):
 
     @display(description="Дата", ordering="published")
     def published_short(self, obj):
-        return (obj.published or "")[:10]
+        return _local_date(obj.published)
 
     @display(description="Совпадений", ordering="n_matches")
     def matches_count(self, obj):
@@ -581,15 +588,16 @@ class JobAdmin(ModelAdmin):
     list_display = ("id", "command", "status_badge", "trigger", "created_at", "started_at",
                     "finished_at", "duration")
     list_display_links = ("id", "command")
-    actions_list = ["run_pipeline", "run_collect", "run_telegram", "run_fetch", "run_match"]
+    actions_list = ["run_pipeline", "run_neg", "run_collect", "run_telegram", "run_fetch",
+                    "run_match"]
     actions_detail = ["stop_job", "rerun_job"]
     warn_unsaved_form = True
 
     add_fieldsets = (
         (None, {"fields": ("command",)}),
         # классы job-* — по ним panel.css прячет блоки, не относящиеся к выбранной команде
-        ("Сбор новостей", {"fields": ("use_gdelt", "use_gnews", "use_rss", "use_telegram",
-                                      "days", "slice_days"),
+        ("Сбор новостей", {"fields": ("use_gdelt", "use_gnews", "use_rss", "use_telegram", "days",
+                                      "slice_days"),
                            "classes": ["job-collect"]}),
         ("Матчинг", {"fields": ("match_all", "keep_weak"), "classes": ["job-match"]}),
         ("Загрузка списка", {"fields": ("names_file", "names_column"),
@@ -605,7 +613,8 @@ class JobAdmin(ModelAdmin):
         return (
             (None, {"fields": ("command", "status_text", "trigger", "created_at", "started_at",
                                "finished_at", "returncode")}),
-            ("Параметры", {"fields": ("use_gdelt", "use_gnews", "use_rss", "use_telegram", "days",
+            ("Параметры", {"fields": ("use_gdelt", "use_gnews", "use_rss", "use_telegram",
+                                      "neg_source_id", "days",
                                       "slice_days", "match_all", "keep_weak", "names_file_name",
                                       "names_column"), "classes": ["collapse"]}),
             ("Лог", {"fields": ("log_view",)}),
@@ -686,6 +695,10 @@ class JobAdmin(ModelAdmin):
     @action(description="Полный цикл", icon="rocket_launch", variant="primary")
     def run_pipeline(self, request):
         return self._quick_job(request, command="pipeline")
+
+    @action(description="Негативные новости РК", icon="campaign")
+    def run_neg(self, request):
+        return self._quick_job(request, command="neg-pipeline", days=7)
 
     @action(description="Собрать новости", icon="travel_explore")
     def run_collect(self, request):
@@ -785,3 +798,5 @@ class ScheduleAdmin(ModelAdmin):
 
 # Telegram-каналы и аккаунт — в отдельном модуле, чтобы этот файл не разрастался
 from . import admin_telegram  # noqa: E402,F401
+# Негативные новости о Казахстане (регистрирует свои модели в admin.site)
+from . import neg_admin  # noqa: E402,F401

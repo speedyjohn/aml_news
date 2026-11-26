@@ -255,8 +255,8 @@ def iter_web_posts(username: str, cutoff: datetime, max_posts: int):
 # ---------------------------------------------------------------------------
 # Сохранение
 # ---------------------------------------------------------------------------
-def _fmt(dt: datetime | None) -> str | None:
-    return dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S") if dt else None
+def _utc(dt: datetime | None) -> datetime | None:
+    return dt.astimezone(timezone.utc) if dt else None
 
 
 def _save_post(conn, ch, url: str, post: Post, source: str) -> tuple[bool, bool]:
@@ -268,7 +268,7 @@ def _save_post(conn, ch, url: str, post: Post, source: str) -> tuple[bool, bool]
         return False, False
     title = make_title(post.text) or make_title(post.summary) or f"Пост {post.msg_id}"
     new = insert_article(
-        conn, url=url, title=title, source=source, published=_fmt(post.date),
+        conn, url=url, title=title, source=source, published=_utc(post.date),
         collector="telegram", query=ch["ref"], summary=post.summary or None,
         text=post.text or None, text_status="ok",
     )
@@ -277,18 +277,17 @@ def _save_post(conn, ch, url: str, post: Post, source: str) -> tuple[bool, bool]
 
 def _update_channel(conn, ch_id: int, **f):
     f["last_checked_at"] = now()
-    sets = ", ".join(f"{k}=?" for k in f if k != "posts_add")
+    sets = ", ".join(f"{k}=%s" for k in f if k != "posts_add")
     vals = [v for k, v in f.items() if k != "posts_add"]
     if "posts_add" in f:
-        sets += ", posts_saved = COALESCE(posts_saved, 0) + ?"
+        sets += ", posts_saved = COALESCE(posts_saved, 0) + %s"
         vals.append(f["posts_add"])
-    conn.execute(f"UPDATE {CHANNELS_TABLE} SET {sets} WHERE id=?", (*vals, ch_id))
+    conn.execute(f"UPDATE {CHANNELS_TABLE} SET {sets} WHERE id=%s", (*vals, ch_id))
     conn.commit()
 
 
 def _table_exists(conn, name: str) -> bool:
-    return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-                        (name,)).fetchone() is not None
+    return conn.execute("SELECT to_regclass(%s) IS NOT NULL", (name,)).fetchone()[0]
 
 
 def load_account(conn) -> dict | None:
@@ -323,7 +322,7 @@ def _collect_web(conn, ch, cutoff) -> tuple[int, int, int]:
     upd = dict(title=title or ch["title"], last_via="web", last_error="", posts_add=new,
                last_post_id=top_id or None)
     if top_date:
-        upd["last_post_at"] = _fmt(top_date)
+        upd["last_post_at"] = _utc(top_date)
     _update_channel(conn, ch["id"], **upd)
     return seen, kept, new
 
@@ -497,7 +496,7 @@ async def _collect_account(conn, acc: dict, channels: list, cutoff: datetime) ->
         if not await client.is_user_authorized():
             msg = "сессия аккаунта больше не действует — подключите аккаунт заново в панели"
             log(f"[tg] {msg}")
-            conn.execute(f"UPDATE {ACCOUNT_TABLE} SET status='error', last_error=? WHERE id=?",
+            conn.execute(f"UPDATE {ACCOUNT_TABLE} SET status='error', last_error=%s WHERE id=%s",
                          (msg, acc["id"]))
             conn.commit()
             for ch in channels:
@@ -534,7 +533,7 @@ async def _collect_account(conn, acc: dict, channels: list, cutoff: datetime) ->
                 upd = dict(title=title, channel_id=ent.id, last_via="account", last_error="",
                            posts_add=new, last_post_id=top_id or None)
                 if top_date:
-                    upd["last_post_at"] = _fmt(top_date)
+                    upd["last_post_at"] = _utc(top_date)
                 _update_channel(conn, ch["id"], **upd)
                 total_new += new
                 log(f"[tg] {ch['ref']} (аккаунт): постов {seen}, с ключевыми словами {kept}, "
@@ -598,7 +597,7 @@ def collect_telegram(conn, days: int = 30) -> int:
             "`python manage.py migrate` и добавьте каналы")
         return 0
     channels = [dict(r) for r in conn.execute(
-        f"SELECT * FROM {CHANNELS_TABLE} WHERE is_active=1 ORDER BY id")]
+        f"SELECT * FROM {CHANNELS_TABLE} WHERE is_active ORDER BY id")]
     if not channels:
         log("[tg] нет включённых каналов — добавьте их в панели: Telegram → Каналы")
         return 0

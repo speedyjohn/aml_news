@@ -1,26 +1,41 @@
 #!/usr/bin/env python3
 """
-Adverse media скрининг: собираем новости о нарушениях и ищем в них имена из списка.
+Adverse media скрининг: собираем новости о нарушениях и ищем в них имена из списка,
+плюс мониторинг негативных новостей о Казахстане.
 
+Скрининг по списку:
   python main.py load-names список.xlsx
   python main.py collect --gdelt --gnews --rss --telegram
   python main.py fetch-text
   python main.py match
   python main.py export matches.xlsx --min-score 60
   python main.py dump aml_dump.json
+
+Негативные новости о Казахстане:
+  python main.py neg-collect --days 7            # все источники
+  python main.py neg-fetch-text
+  python main.py neg-analyze
+  python main.py neg-export negative.xlsx --days 30 --status relevant
+  python main.py neg-dump negative.json
+
+  python main.py init-db      # создать/обновить таблицы
   python main.py stats
+
+База — PostgreSQL, адрес в файле .env (AML_DATABASE_URL).
 """
 import argparse
 import sys
 
-import config
-from db import connect
+from db import DatabaseNotConfigured, connect
 
 
 def main():
-    p = argparse.ArgumentParser(description="Поиск получателей в новостях о нарушениях (ОД/ФТ)")
-    p.add_argument("--db", default=config.DB_PATH, help="путь к SQLite (по умолчанию aml_news.sqlite)")
+    p = argparse.ArgumentParser(description="Поиск получателей в новостях о нарушениях (ОД/ФТ) "
+                                            "и мониторинг негативных новостей о Казахстане")
+    p.add_argument("--dsn", help="адрес PostgreSQL (по умолчанию AML_DATABASE_URL из .env)")
     sub = p.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("init-db", help="создать / обновить таблицы в базе")
 
     s = sub.add_parser("load-names", help="загрузить список имён (xlsx/csv)")
     s.add_argument("file")
@@ -52,16 +67,53 @@ def main():
     s = sub.add_parser("export-skipped", help="выгрузить имена, которые не ищутся, и причину")
     s.add_argument("out")
 
-    s = sub.add_parser("dump", help="полный дамп базы в JSON (получатели, новости, совпадения)")
+    s = sub.add_parser("dump", help="полный дамп скрининга в JSON (получатели, новости, совпадения)")
     s.add_argument("out", nargs="?", default="aml_dump.json")
     s.add_argument("--no-text", action="store_true", help="без полных текстов статей")
+
+    # --- негативные новости ---
+    s = sub.add_parser("neg-collect", help="собрать негативные новости о Казахстане")
+    s.add_argument("--gnews", action="store_true", help="Google News (поисковые запросы)")
+    s.add_argument("--gdelt", action="store_true", help="GDELT (запросы с негативной тональностью)")
+    s.add_argument("--rss", action="store_true", help="RSS-ленты из раздела «Источники»")
+    s.add_argument("--telegram", action="store_true", help="Telegram-каналы из раздела «Источники»")
+    s.add_argument("--days", type=int, default=7, help="за сколько дней (по умолчанию 7)")
+    s.add_argument("--source-id", type=int, help="только один источник из раздела «Источники»")
+
+    s = sub.add_parser("neg-fetch-text", help="докачать полный текст негативных новостей")
+    s.add_argument("--workers", type=int, default=8)
+    s.add_argument("--limit", type=int)
+
+    s = sub.add_parser("neg-analyze", help="пересчитать категории, регионы и балл")
+    s.add_argument("--all", action="store_true",
+                   help="все новости (после правки словарей в config.py), а не только новые")
+
+    s = sub.add_parser("neg-export", help="выгрузить негативные новости (xlsx/csv/json)")
+    s.add_argument("out")
+    s.add_argument("--min-score", type=int, default=0)
+    s.add_argument("--status", choices=["new", "relevant", "irrelevant"],
+                   help="new — не проверено, relevant — актуально, irrelevant — не актуально")
+    s.add_argument("--days", type=int, help="только за последние N дней")
+    s.add_argument("--no-text", action="store_true", help="без полных текстов")
+
+    s = sub.add_parser("neg-dump", help="дамп негативных новостей и источников в JSON")
+    s.add_argument("out", nargs="?", default="negative_dump.json")
+    s.add_argument("--no-text", action="store_true", help="без полных текстов")
 
     sub.add_parser("stats", help="сводка по базе")
 
     a = p.parse_args()
-    conn = connect(a.db)
+    try:
+        conn = connect(a.dsn)
+    except DatabaseNotConfigured as e:
+        print(f"ОШИБКА: {e}", file=sys.stderr)
+        return 2
 
-    if a.cmd == "load-names":
+    if a.cmd == "init-db":
+        from db import SCHEMA_VERSION
+        print(f"Схема базы в порядке (версия {SCHEMA_VERSION})")
+
+    elif a.cmd == "load-names":
         from match import load_names
         for k, v in load_names(conn, a.file, a.column).items():
             print(f"{k}: {v}")
@@ -109,20 +161,65 @@ def main():
         counts = dump_json(conn, a.out, with_text=not a.no_text)
         print("Выгружено:", ", ".join(f"{k}: {v}" for k, v in counts.items()), "->", a.out)
 
+    elif a.cmd == "neg-collect":
+        import negative
+        if not (a.gnews or a.gdelt or a.rss or a.telegram):
+            a.gnews = a.gdelt = a.rss = a.telegram = True
+        steps = []
+        # быстрые и самые полезные источники — первыми, медленный GDELT — в конце
+        if a.telegram:
+            steps.append(("Telegram", lambda: negative.collect_telegram(
+                conn, a.days, only_id=a.source_id)))
+        if a.rss:
+            steps.append(("RSS", lambda: negative.collect_rss(conn, a.days, a.source_id)))
+        if a.gnews and not a.source_id:
+            steps.append(("Google News", lambda: negative.collect_gnews(conn, a.days)))
+        if a.gdelt and not a.source_id:
+            steps.append(("GDELT", lambda: negative.collect_gdelt(conn, a.days)))
+        for name, fn in steps:
+            st = fn()
+            print(f"{name}: {negative._fmt(st)}")
+
+    elif a.cmd == "neg-fetch-text":
+        import negative
+        negative.fetch_text(conn, a.workers, a.limit)
+
+    elif a.cmd == "neg-analyze":
+        import negative
+        negative.reanalyze(conn, a.all)
+
+    elif a.cmd == "neg-export":
+        from export import export_neg
+        n = export_neg(conn, a.out, a.min_score, a.status, a.days, with_text=not a.no_text)
+        print("Выгружено:", n, "->", a.out)
+
+    elif a.cmd == "neg-dump":
+        from export import NEG_DUMP_TABLES, dump_json
+        counts = dump_json(conn, a.out, with_text=not a.no_text, tables=NEG_DUMP_TABLES)
+        print("Выгружено:", ", ".join(f"{k}: {v}" for k, v in counts.items()), "->", a.out)
+
     elif a.cmd == "stats":
         q = lambda sql: conn.execute(sql).fetchall()
         print("Сущностей:", q("SELECT COUNT(*) FROM entities")[0][0],
               "| ищем:", q("SELECT COUNT(*) FROM entities WHERE skip_reason IS NULL")[0][0])
         print("Статей:", q("SELECT COUNT(*) FROM articles")[0][0])
-        for r in q("SELECT collector, COUNT(*), SUM(text_status='ok') FROM articles GROUP BY collector"):
-            print(f"  {r[0]}: {r[1]} (с полным текстом: {r[2] or 0})")
+        for r in q("SELECT collector, COUNT(*), COUNT(*) FILTER (WHERE text_status = 'ok') "
+                   "FROM articles GROUP BY collector ORDER BY 2 DESC"):
+            print(f"  {r[0]}: {r[1]} (с полным текстом: {r[2]})")
         print("Не обработано матчингом:", q("SELECT COUNT(*) FROM articles WHERE matched_at IS NULL")[0][0])
         print("Совпадений:", q("SELECT COUNT(*) FROM matches")[0][0])
-        for r in q("SELECT CASE WHEN score>=80 THEN '80-100' WHEN score>=60 THEN '60-79' "
+        for r in q("SELECT CASE WHEN score >= 80 THEN '80-100' WHEN score >= 60 THEN '60-79' "
                    "ELSE '<60' END b, COUNT(*) FROM matches GROUP BY b ORDER BY b DESC"):
             print(f"  балл {r[0]}: {r[1]}")
         for r in q("SELECT review_status, COUNT(*) FROM matches GROUP BY review_status"):
             print(f"  статус {r[0]}: {r[1]}")
+        print("Негативных новостей:", q("SELECT COUNT(*) FROM neg_news")[0][0])
+        for r in q("SELECT collector, COUNT(*) FROM neg_news GROUP BY collector ORDER BY 2 DESC"):
+            print(f"  {r[0]}: {r[1]}")
+        for r in q("SELECT review_status, COUNT(*) FROM neg_news GROUP BY review_status"):
+            print(f"  статус {r[0]}: {r[1]}")
+        on, total = q("SELECT COUNT(*) FILTER (WHERE enabled), COUNT(*) FROM neg_sources")[0]
+        print(f"Источников (RSS/Telegram): {total}, включено {on}")
     return 0
 
 

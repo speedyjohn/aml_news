@@ -43,7 +43,7 @@
               <tr class="border-t border-base-200 dark:border-base-800">
                 <td class="py-2 pr-3 font-semibold {% if m.score >= 80 %}text-red-600{% elif m.score >= 60 %}text-orange-600{% endif %}">{{ m.score }}</td>
                 <td class="py-2 pr-3"><a class="font-medium" href="{% url 'admin:screening_match_change' m.pk %}">{{ m.entity_name }}</a><div class="text-xs"><a class="text-primary-600" href="{% url 'admin:screening_entity_change' m.entity_id %}">профиль</a></div></td>
-                <td class="py-2 pr-3"><a class="text-primary-600 underline" href="{{ m.url }}" target="_blank" rel="noopener">{{ m.title|default:m.url|truncatechars:80 }}</a><div class="text-subtle text-xs">{{ m.source|default:"" }}{% if m.published %} · {{ m.published|slice:":10" }}{% endif %}</div></td>
+                <td class="py-2 pr-3"><a class="text-primary-600 underline" href="{{ m.url }}" target="_blank" rel="noopener">{{ m.title|default:m.url|truncatechars:80 }}</a><div class="text-subtle text-xs">{{ m.source|default:"" }}{% if m.published %} · {{ m.published|date:"d.m.Y" }}{% endif %}</div></td>
                 <td class="py-2 text-xs">{{ m.categories|truncatechars:60 }}</td>
               </tr>
             {% endfor %}
@@ -53,6 +53,41 @@
           <p class="text-subtle">Пока нет совпадений. Загрузите список и запустите полный цикл в разделе «Запуски».</p>
         {% endif %}
       {% endcomponent %}
+
+      <div class="mt-4">
+      {% component "unfold/components/card.html" with title="Негативные новости РК · 7 дней" %}
+        <div class="grid gap-3 grid-cols-1 md:grid-cols-3 mb-4">
+          <a href="{{ neg.new_strong_url }}" class="border border-base-200 dark:border-base-700 rounded-default px-3 py-2">
+            <div class="text-subtle text-xs">Сильные, ждут проверки (≥ {{ neg.strong }})</div>
+            <div class="font-semibold text-2xl text-important">{{ neg.new_strong }}</div>
+          </a>
+          <a href="{{ neg.relevant_url }}" class="border border-base-200 dark:border-base-700 rounded-default px-3 py-2">
+            <div class="text-subtle text-xs">Отмечены актуальными</div>
+            <div class="font-semibold text-2xl text-important">{{ neg.relevant }}</div>
+          </a>
+          <a href="{{ neg.total_url }}" class="border border-base-200 dark:border-base-700 rounded-default px-3 py-2">
+            <div class="text-subtle text-xs">Всего найдено</div>
+            <div class="font-semibold text-2xl text-important">{{ neg.total }}</div>
+          </a>
+        </div>
+        {% if neg.top %}
+          <table class="w-full text-sm">
+            <tbody>
+            {% for n in neg.top %}
+              <tr class="border-t border-base-200 dark:border-base-800">
+                <td class="py-2 pr-3 font-semibold {% if n.score >= 80 %}text-red-600{% else %}text-orange-600{% endif %}">{{ n.score }}</td>
+                <td class="py-2 pr-3"><a class="font-medium" href="{% url 'admin:screening_negnews_change' n.pk %}">{{ n.title|default:n.url|truncatechars:110 }}</a>
+                  <div class="text-subtle text-xs">{{ n.source|default:"" }}{% if n.published %} · {{ n.published|date:"d.m.Y" }}{% endif %}{% if n.regions %} · {{ n.regions|truncatechars:50 }}{% endif %}</div></td>
+              </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <p class="text-subtle">Непроверенных сильных негативных новостей за неделю нет.</p>
+        {% endif %}
+        <a href="{{ neg.overview_url }}" class="inline-block mt-3 text-primary-600 text-sm underline">Открыть обзор негативных новостей</a>
+      {% endcomponent %}
+      </div>
     </div>
 
     <div class="flex flex-col gap-4">
@@ -89,10 +124,11 @@
       {% endcomponent %}
 
       {% component "unfold/components/card.html" with title="Выгрузка данных" %}
-        <p class="text-sm">Вся база одним файлом JSON: список получателей, новости и совпадения.</p>
+        <p class="text-sm">Скрининг одним файлом JSON: список получателей, новости и совпадения.</p>
         <div class="flex flex-col gap-1 mt-3 text-sm">
           <a href="{{ dump_url }}" class="text-primary-600 underline">Скачать полный дамп</a>
           <a href="{{ dump_no_text_url }}" class="text-primary-600 underline">Скачать без полных текстов статей</a>
+          <a href="{{ neg_dump_url }}" class="text-primary-600 underline">Негативные новости РК (JSON)</a>
         </div>
         <p class="text-subtle text-xs mt-2">Excel-выгрузки — в разделах «Совпадения» и «Список получателей».</p>
       {% endcomponent %}
