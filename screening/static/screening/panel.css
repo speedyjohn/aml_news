@@ -1,9 +1,10 @@
 /* Свои стили панели поверх Unfold. */
 
 /* --- Форма нового запуска: показываем только блоки, нужные выбранной команде --- */
-#job_form:has(#id_command option:checked:is([value="fetch-text"], [value="match"], [value="load-names"], [value="neg-analyze"])) fieldset.job-collect,
-#job_form:has(#id_command option:checked:is([value="collect"], [value="fetch-text"], [value="load-names"], [value="neg-pipeline"], [value="neg-analyze"])) fieldset.job-match,
-#job_form:has(#id_command option:checked:is([value="collect"], [value="fetch-text"], [value="neg-pipeline"], [value="neg-analyze"])) fieldset.job-names {
+#job_form:has(#id_command option:checked:is([value="fetch-text"], [value="match"], [value="load-names"], [value="neg-analyze"], [value="govkz-docs"])) fieldset.job-collect,
+#job_form:has(#id_command option:checked:is([value="collect"], [value="fetch-text"], [value="load-names"], [value="neg-pipeline"], [value="neg-analyze"], [value="govkz-docs"])) fieldset.job-match,
+#job_form:has(#id_command option:checked:is([value="collect"], [value="fetch-text"], [value="neg-pipeline"], [value="neg-analyze"], [value="govkz-docs"])) fieldset.job-names,
+#job_form:has(#id_command option:checked:not([value="govkz-docs"])) fieldset.job-govkz {
   display: none;
 }
 
