@@ -13,10 +13,10 @@ from django.contrib.auth.models import Group, User
 from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import Count, Exists, Max, Min, OuterRef, Q
-from django.http import HttpResponse, JsonResponse, QueryDict
+from django.http import FileResponse, Http404, HttpResponse, JsonResponse, QueryDict
 from django.shortcuts import get_object_or_404, redirect
 from django.template.response import TemplateResponse
-from django.urls import reverse
+from django.urls import path, reverse
 from django.utils import timezone
 from django.utils.formats import date_format
 from django.utils.html import escape, format_html
@@ -589,7 +589,7 @@ class JobAdmin(ModelAdmin):
                     "finished_at", "duration")
     list_display_links = ("id", "command")
     actions_list = ["run_pipeline", "run_neg", "run_collect", "run_telegram", "run_fetch",
-                    "run_match"]
+                    "run_match", "run_govkz"]
     actions_detail = ["stop_job", "rerun_job"]
     warn_unsaved_form = True
 
@@ -605,11 +605,19 @@ class JobAdmin(ModelAdmin):
                              "description": "Если приложить файл к «Полному циклу» или "
                                             "«Матчингу», список сначала загрузится, а затем "
                                             "будут перепроверены все статьи."}),
+        ("Документы gov.kz", {"fields": ("source_url", "doc_langs"), "classes": ["job-govkz"]}),
     )
 
     def get_fieldsets(self, request, obj=None):
         if obj is None:
             return self.add_fieldsets
+        if obj.command == "govkz-docs":
+            return (
+                (None, {"fields": ("command", "status_text", "trigger", "created_at",
+                                   "started_at", "finished_at", "returncode")}),
+                ("Документы gov.kz", {"fields": ("source_link", "doc_langs", "docs_result")}),
+                ("Лог", {"fields": ("log_view",)}),
+            )
         return (
             (None, {"fields": ("command", "status_text", "trigger", "created_at", "started_at",
                                "finished_at", "returncode")}),
@@ -623,7 +631,63 @@ class JobAdmin(ModelAdmin):
     def get_readonly_fields(self, request, obj=None):
         if obj is None:
             return ()
-        return [f.name for f in Job._meta.fields] + ["status_text", "log_view", "names_file_name"]
+        return [f.name for f in Job._meta.fields] + ["status_text", "log_view", "names_file_name",
+                                                     "source_link", "docs_result"]
+
+    # --- результат «Скачать документы с gov.kz»: архив и опись ---
+    _DOC_FILES = {"zip": lambda job: jobs.docs_folder(job).with_suffix(".zip"),
+                  "index": lambda job: jobs.docs_folder(job) / "документы.xlsx"}
+
+    def get_urls(self):
+        return [path("<int:job_id>/docs/<str:kind>/", self.admin_site.admin_view(self.docs_file),
+                     name="screening_job_docs")] + super().get_urls()
+
+    def docs_file(self, request, job_id, kind):
+        job = get_object_or_404(Job, pk=job_id, command="govkz-docs")
+        if kind not in self._DOC_FILES or not self.has_view_permission(request, job):
+            raise Http404
+        f = self._DOC_FILES[kind](job)
+        if not f.is_file():
+            raise Http404("Файл ещё не готов")
+        name = f"govkz_job_{job.pk}" + (".zip" if kind == "zip" else ".xlsx")
+        return FileResponse(open(f, "rb"), as_attachment=True, filename=name)
+
+    def delete_model(self, request, obj):
+        jobs.remove_docs(obj)
+        super().delete_model(request, obj)
+
+    def delete_queryset(self, request, queryset):
+        for obj in queryset:
+            jobs.remove_docs(obj)
+        super().delete_queryset(request, queryset)
+
+    @display(description="Ссылка")
+    def source_link(self, obj):
+        if not obj.source_url:
+            return "-"
+        return format_html('<a href="{}" target="_blank" rel="noopener" class="text-primary-600 '
+                           'break-all">{}</a>', obj.source_url, obj.source_url)
+
+    @display(description="Результат")
+    def docs_result(self, obj):
+        folder = jobs.docs_folder(obj)
+        zpath, index = folder.with_suffix(".zip"), folder / "документы.xlsx"
+        if not zpath.is_file():
+            if obj.status in ("queued", "running"):
+                return "Скачивается — архив появится здесь, когда запуск закончится"
+            if folder.is_dir():
+                return f"Архив не собран, файлы лежат в папке {folder}"
+            return "-"
+        n = sum(1 for p in folder.rglob("*") if p.is_file() and p.suffix != ".part"
+                and p.name != index.name)
+        size = zpath.stat().st_size / 1024 / 1024
+        url = lambda kind: reverse("admin:screening_job_docs", args=[obj.pk, kind])
+        return format_html(
+            '<div class="pf-row"><a class="pf-btn primary" href="{}"><span class="material-symbols-outlined">'
+            'download</span>Скачать архив ({} файлов, {} МБ)</a>'
+            '<a class="pf-btn" href="{}"><span class="material-symbols-outlined">table_view</span>'
+            'Опись документов (xlsx)</a></div><div class="pf-muted pf-small" style="margin-top:6px">'
+            'Папка на диске: {}</div>', url("zip"), n, f"{size:.1f}", url("index"), folder)
 
     @display(description="Файл со списком")
     def names_file_name(self, obj):
@@ -716,6 +780,11 @@ class JobAdmin(ModelAdmin):
     @action(description="Матчинг", icon="manage_search")
     def run_match(self, request):
         return self._quick_job(request, command="match")
+
+    @action(description="Документы gov.kz", icon="folder_zip")
+    def run_govkz(self, request):
+        # нужна ссылка — открываем форму с уже выбранной командой
+        return redirect(reverse("admin:screening_job_add") + "?command=govkz-docs")
 
     # кнопки на странице запуска: «Остановить» — пока идёт, «Запустить ещё раз» — когда закончился
     def _is_active(self, object_id) -> bool:

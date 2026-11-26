@@ -205,7 +205,10 @@ class Job(models.Model):
         ("neg-pipeline", "Негативные новости РК: сбор → тексты → разметка"),
         ("neg-analyze", "Негативные новости: пересчитать разметку"),
         ("both", "Всё сразу: скрининг + негативные новости"),
+        ("govkz-docs", "Скачать документы с gov.kz"),
     ]
+    DOC_LANGS = [("ru,kk", "Русский и казахский"), ("ru", "Только русский"),
+                 ("kk", "Только казахский")]
     STATUSES = [("queued", "В очереди"), ("running", "Выполняется"), ("done", "Готово"),
                 ("failed", "Ошибка"), ("stopped", "Остановлено"),
                 ("interrupted", "Прервано (перезапуск панели)")]
@@ -230,6 +233,13 @@ class Job(models.Model):
                                   null=True, blank=True)
     names_column = models.CharField("Колонка с именами", max_length=200, blank=True,
                                     help_text="Пусто — первая колонка")
+    source_url = models.URLField(
+        "Ссылка на раздел gov.kz", max_length=1000, blank=True,
+        help_text="Откройте на gov.kz раздел «Документы» органа, выставьте нужные фильтры и "
+                  "вставьте ссылку из адресной строки. Будут пройдены все страницы.")
+    doc_langs = models.CharField("Языки документов", max_length=10, choices=DOC_LANGS,
+                                 default="ru,kk",
+                                 help_text="У казахской версии документов обычно свои файлы")
 
     trigger = models.CharField("Кто запустил", max_length=20, default="вручную")
     status = models.CharField("Статус", max_length=20, choices=STATUSES, default="queued")
@@ -248,6 +258,14 @@ class Job(models.Model):
         return f"#{self.pk} {self.get_command_display()}"
 
     def clean(self):
+        if self.command == "govkz-docs":
+            from govkz_docs import BadLink, parse_link
+            if not self.source_url:
+                raise ValidationError({"source_url": "Вставьте ссылку на раздел документов"})
+            try:
+                parse_link(self.source_url)
+            except BadLink as e:
+                raise ValidationError({"source_url": str(e)})
         if self.command == "load-names" and not self.names_file:
             raise ValidationError({"names_file": "Для загрузки списка нужен файл"})
         if self.command in ("collect", "pipeline", "neg-pipeline", "both"):

@@ -18,6 +18,9 @@ Adverse media скрининг: собираем новости о наруше�
   python main.py neg-export negative.xlsx --days 30 --status relevant
   python main.py neg-dump negative.json
 
+Документы госорганов с gov.kz (все страницы раздела, все файлы):
+  python main.py govkz-docs "https://www.gov.kz/org/esep/documents/1?directions=_12058" --out docs --zip
+
   python main.py init-db      # создать/обновить таблицы
   python main.py stats
 
@@ -102,7 +105,32 @@ def main():
 
     sub.add_parser("stats", help="сводка по базе")
 
+    s = sub.add_parser("govkz-docs", help="скачать все файлы раздела «Документы» с gov.kz")
+    s.add_argument("link", help="ссылка на раздел документов (с фильтрами) или на один документ")
+    s.add_argument("--out", default="govkz_docs", help="куда сохранить (по умолчанию govkz_docs)")
+    s.add_argument("--lang", default="ru,kk",
+                   help="языки через запятую: ru, kk, en (по умолчанию ru,kk)")
+    s.add_argument("--zip", action="store_true", help="дополнительно упаковать всё в zip")
+
     a = p.parse_args()
+    if a.cmd == "govkz-docs":      # база не нужна
+        import govkz_docs
+        langs = [x.strip() for x in a.lang.split(",") if x.strip()]
+        bad = [x for x in langs if x not in govkz_docs.LANGS]
+        if bad or not langs:
+            print(f"ОШИБКА: неизвестный язык {', '.join(bad) or '(пусто)'}; можно ru, kk, en",
+                  file=sys.stderr)
+            return 2
+        try:
+            st = govkz_docs.download_all(a.link, a.out, langs, with_zip=a.zip)
+        except govkz_docs.BadLink as e:
+            print(f"ОШИБКА: {e}", file=sys.stderr)
+            return 2
+        print(f"Документов: {st['documents']}, файлов: {st['files']} — скачано {st['downloaded']} "
+              f"({govkz_docs.human(st['bytes'])}), уже были {st['existing']}, "
+              f"повторы {st['duplicates']}, ошибок {st['failed']}")
+        return 1 if st["failed"] else 0
+
     try:
         conn = connect(a.dsn)
     except DatabaseNotConfigured as e:

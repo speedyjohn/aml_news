@@ -4,6 +4,7 @@
 остальные ждут в очереди.
 """
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -22,6 +23,21 @@ _stop_requested: set[int] = set()
 
 MAIN = Path(settings.BASE_DIR) / "main.py"
 LOG_DIR = Path(settings.MEDIA_ROOT) / "logs"
+DOCS_DIR = Path(settings.MEDIA_ROOT) / "govkz"
+
+
+def docs_folder(job: Job) -> Path:
+    """Куда запуск «Скачать документы с gov.kz» складывает файлы (архив — рядом, .zip)."""
+    return DOCS_DIR / f"job_{job.pk}"
+
+
+def remove_docs(job: Job):
+    """Удаляет скачанные запуском документы и архив (при удалении запуска)."""
+    folder = docs_folder(job)
+    if job.pk in _procs:      # ещё качает — не мешаем
+        return
+    shutil.rmtree(folder, ignore_errors=True)
+    folder.with_suffix(".zip").unlink(missing_ok=True)
 
 
 def _steps(job: Job) -> list[list[str]]:
@@ -67,6 +83,9 @@ def _steps(job: Job) -> list[list[str]]:
 
     neg_pipeline = [neg_collect(), base + ["neg-fetch-text"], base + ["neg-analyze"]]
 
+    if job.command == "govkz-docs":
+        return [base + ["govkz-docs", job.source_url, "--out", str(docs_folder(job)),
+                        "--lang", job.doc_langs or "ru,kk", "--zip"]]
     if job.command == "neg-pipeline":
         return neg_pipeline
     if job.command == "neg-analyze":
