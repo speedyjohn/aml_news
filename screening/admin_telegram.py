@@ -1,4 +1,5 @@
 """Админка Telegram: список каналов (с загрузкой файлом) и подключение аккаунта-юзербота."""
+import io
 import os
 from urllib.parse import urlencode
 
@@ -6,13 +7,13 @@ import pandas as pd
 from django import forms
 from django.contrib import admin, messages
 from django.core.exceptions import ValidationError
-from django.db import transaction
 from django.shortcuts import redirect
 from django.template.response import TemplateResponse
 from django.urls import path, reverse
 from django.utils import timezone
 from django.utils.formats import date_format
 from django.utils.html import format_html
+from django.utils.safestring import mark_safe
 from unfold.admin import ModelAdmin
 from unfold.decorators import action, display
 from unfold.widgets import (UnfoldAdminFileFieldWidget, UnfoldAdminPasswordWidget,
@@ -23,9 +24,11 @@ import tg_collect as tg
 
 from . import jobs
 from .admin import _ext_link, _xlsx_response
-from .models import Job, TgAccount, TgChannel
+from .models import TgAccount, TgChannel
 
 MAX_PROBE = 30          # сколько каналов за раз проверять кнопкой «Проверить»
+TABLE_EXTS = (".csv", ".xlsx", ".xlsm", ".xls")
+TEXT_ENCODINGS = ("utf-8-sig", "cp1251")
 
 
 def _dt(value):
@@ -126,13 +129,17 @@ class UploadForm(forms.Form):
 def _file_text(f) -> str:
     """Весь текст из загруженного файла: строки txt или все ячейки csv/xlsx."""
     ext = os.path.splitext(f.name)[1].lower()
-    if ext in (".xlsx", ".xlsm", ".xls"):
-        sheets = pd.read_excel(f, header=None, sheet_name=None, dtype=str)
-        frames = list(sheets.values())
-    elif ext == ".csv":
+    if ext not in TABLE_EXTS:
         raw = f.read()
-        import io
-        for enc in ("utf-8-sig", "cp1251"):
+        for enc in TEXT_ENCODINGS:
+            try:
+                return raw.decode(enc)
+            except UnicodeDecodeError:
+                continue
+        raise ValidationError("Не удалось прочитать файл — сохраните его в UTF-8")
+    if ext == ".csv":
+        raw = f.read()
+        for enc in TEXT_ENCODINGS:
             try:
                 frames = [pd.read_csv(io.StringIO(raw.decode(enc)), header=None, dtype=str,
                                       sep=None, engine="python")]
@@ -142,13 +149,7 @@ def _file_text(f) -> str:
         else:
             raise ValidationError("Не удалось прочитать CSV")
     else:
-        raw = f.read()
-        for enc in ("utf-8-sig", "cp1251"):
-            try:
-                return raw.decode(enc)
-            except UnicodeDecodeError:
-                continue
-        raise ValidationError("Не удалось прочитать файл — сохраните его в UTF-8")
+        frames = list(pd.read_excel(f, header=None, sheet_name=None, dtype=str).values())
     cells = []
     for df in frames:
         cells += [str(v) for v in df.to_numpy().ravel() if isinstance(v, str) and v.strip()]
@@ -333,10 +334,8 @@ class TgChannelAdmin(ModelAdmin):
         if not TgChannel.objects.filter(is_active=True).exists():
             messages.warning(request, "Нет включённых каналов")
             return redirect(reverse("admin:screening_tgchannel_changelist"))
-        job = Job.objects.create(command="collect", use_gdelt=False, use_gnews=False,
+        job, busy = jobs.enqueue(command="collect", use_gdelt=False, use_gnews=False,
                                  use_rss=False, use_telegram=True, days=7)
-        busy = jobs.is_busy()
-        transaction.on_commit(lambda: jobs.submit(job))
         messages.info(request, "Сбор за 7 дней поставлен в очередь" if busy
                       else "Сбор за 7 дней запущен")
         return redirect(reverse("admin:screening_job_change", args=[job.pk]))
@@ -377,8 +376,7 @@ class TgChannelAdmin(ModelAdmin):
                     f = form.cleaned_data.get("file")
                     if f:
                         content = _file_text(f)
-                        if os.path.splitext(f.name)[1].lower() in (".csv", ".xlsx", ".xlsm",
-                                                                   ".xls"):
+                        if os.path.splitext(f.name)[1].lower() in TABLE_EXTS:
                             table_text = content
                         else:
                             text += "\n" + content
@@ -514,7 +512,6 @@ class TgAccountAdmin(ModelAdmin):
 
     @display(description="Инструкция")
     def help_view(self, obj):
-        from django.utils.safestring import mark_safe
         return mark_safe(HELP_HTML)
 
     @display(description="Статус")

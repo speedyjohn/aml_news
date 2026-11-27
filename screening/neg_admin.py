@@ -4,7 +4,7 @@ from datetime import timedelta
 
 from django import forms
 from django.contrib import admin, messages
-from django.db import transaction
+from django.db.models import Q
 from django.db.models.expressions import RawSQL
 from django.http import HttpResponse
 from django.shortcuts import redirect
@@ -23,7 +23,8 @@ import config as aml_config
 import export as aml_export
 
 from . import jobs
-from .models import NegNews, NegSource, Job
+from .admin import _filtered_queryset
+from .models import NegNews, NegSource
 
 NEG_CAT_SHORT = {
     "Срыв сроков / долгострой": "Сроки", "Удорожание / бюджет": "Бюджет",
@@ -137,11 +138,6 @@ class NegNewsAddForm(forms.ModelForm):
         return data
 
 
-def _filtered_qs(model_admin, request):
-    from .admin import _filtered_queryset
-    return _filtered_queryset(model_admin, request)
-
-
 def _rows_for_export(qs) -> list[dict]:
     fields = list(aml_export.NEG_COLUMNS) + [f for f in aml_export.NEG_JSON_FIELDS
                                              if f not in aml_export.NEG_COLUMNS]
@@ -239,7 +235,6 @@ class NegNewsAdmin(ModelAdmin):
             return queryset, False
         fts = RawSQL("SELECT id FROM neg_news WHERE search @@ websearch_to_tsquery('russian', %s)",
                      [term])
-        from django.db.models import Q
         return queryset.filter(Q(id__in=fts) | Q(title__icontains=term) |
                                Q(source__icontains=term) | Q(url__icontains=term)), False
 
@@ -385,9 +380,13 @@ class NegNewsAdmin(ModelAdmin):
         return f"{obj.reviewed_by or '—'}, {local_dt(obj.reviewed_at)}"
 
     # --- массовые действия
+    @staticmethod
+    def _set_status(request, qs, status) -> int:
+        return qs.update(review_status=status, reviewed_by=request.user.get_username(),
+                         reviewed_at=timezone.now())
+
     def _set(self, request, qs, status):
-        n = qs.update(review_status=status, reviewed_by=request.user.get_username(),
-                      reviewed_at=timezone.now())
+        n = self._set_status(request, qs, status)
         self.message_user(request, f"Обновлено: {n}", messages.SUCCESS)
 
     @admin.action(description="Отметить: актуально")
@@ -413,37 +412,34 @@ class NegNewsAdmin(ModelAdmin):
 
     @action(description="Excel (по фильтрам)", icon="download")
     def export_filtered(self, request):
-        return neg_xlsx_response(_filtered_qs(self, request), _stamp("negative") + ".xlsx")
+        return neg_xlsx_response(_filtered_queryset(self, request), _stamp("negative") + ".xlsx")
 
     @action(description="JSON (по фильтрам)", icon="data_object")
     def export_filtered_json(self, request):
-        return neg_json_response(_filtered_qs(self, request), _stamp("negative") + ".json")
+        return neg_json_response(_filtered_queryset(self, request), _stamp("negative") + ".json")
 
     @action(description="Собрать сейчас", icon="travel_explore", variant="primary")
     def collect_now(self, request):
-        job = Job.objects.create(command="neg-pipeline", days=7)
-        busy = jobs.is_busy()
-        transaction.on_commit(lambda: jobs.submit(job))
+        job, busy = jobs.enqueue(command="neg-pipeline", days=7)
         messages.info(request, "Сбор поставлен в очередь" if busy else "Сбор запущен")
         return redirect(reverse("admin:screening_job_change", args=[job.pk]))
 
     # --- кнопки в строке и в карточке
     def _quick(self, request, object_id, status):
-        NegNews.objects.filter(pk=object_id).update(
-            review_status=status, reviewed_by=request.user.get_username(),
-            reviewed_at=timezone.now())
+        self._set_status(request, NegNews.objects.filter(pk=object_id), status)
+
+    def _row(self, request, object_id, status):
+        self._quick(request, object_id, status)
+        return redirect(request.META.get("HTTP_REFERER") or
+                        reverse("admin:screening_negnews_changelist"))
 
     @action(description="Актуально", icon="flag")
     def row_relevant(self, request, object_id):
-        self._quick(request, object_id, "relevant")
-        return redirect(request.META.get("HTTP_REFERER") or
-                        reverse("admin:screening_negnews_changelist"))
+        return self._row(request, object_id, "relevant")
 
     @action(description="Не актуально", icon="block")
     def row_irrelevant(self, request, object_id):
-        self._quick(request, object_id, "irrelevant")
-        return redirect(request.META.get("HTTP_REFERER") or
-                        reverse("admin:screening_negnews_changelist"))
+        return self._row(request, object_id, "irrelevant")
 
     @action(description="Открыть оригинал", icon="open_in_new")
     def row_open(self, request, object_id):
@@ -562,9 +558,8 @@ class NegSourceAdmin(ModelAdmin):
     @action(description="Прочитать сейчас", icon="sync")
     def read_now(self, request, object_id):
         src = NegSource.objects.get(pk=object_id)
-        job = Job.objects.create(command="neg-pipeline", days=7, neg_source_id=src.pk,
-                                 use_telegram=src.kind == "telegram", use_rss=src.kind == "rss",
-                                 use_gnews=False, use_gdelt=False)
-        transaction.on_commit(lambda: jobs.submit(job))
+        job, _ = jobs.enqueue(command="neg-pipeline", days=7, neg_source_id=src.pk,
+                              use_telegram=src.kind == "telegram", use_rss=src.kind == "rss",
+                              use_gnews=False, use_gdelt=False)
         messages.info(request, f"Чтение источника «{src.name}» поставлено в очередь")
         return redirect(reverse("admin:screening_job_change", args=[job.pk]))

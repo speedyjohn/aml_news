@@ -1,4 +1,5 @@
 """Выгрузки: Excel/CSV/JSON для совпадений, имён и негативных новостей, полный JSON-дамп."""
+import io
 import json
 from datetime import date, datetime, timezone
 
@@ -174,7 +175,6 @@ NEG_WIDTHS = {"Дата публикации": 17, "Название": 70, "Из
 
 
 def neg_xlsx_bytes(rows: list[dict], with_text: bool = True) -> bytes:
-    import io
     df = neg_dataframe(rows, with_text)
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as xw:

@@ -60,10 +60,9 @@ def load_names(conn, path: str, column: str | None = None) -> dict:
             "INSERT INTO entities (name, variants, kind, core, pattern, tokens, skip_reason) "
             "VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (kind, core) DO NOTHING", rows)
     conn.commit()
-    new = len(rows)
 
     stats = {"строк в файле (уникальных)": len(raw), "сущностей после склейки": len(groups),
-             "новых добавлено": new}
+             "новых добавлено": len(rows)}
     for kind, n in conn.execute(
             "SELECT kind, COUNT(*) FROM entities WHERE skip_reason IS NULL GROUP BY kind"):
         stats[f"ищем: {kind}"] = n
@@ -151,7 +150,7 @@ class Matcher:
     def match(self, norm: str, title_end: int, keep_weak: bool = False) -> list[Hit]:
         kw = keywords.find(norm)
         kw_pos = [p for p, _, _ in kw]
-        any_kw = bool(kw)
+        kw_in_title = bool(kw) and kw_pos[0] < title_end
         best: dict[int, Hit] = {}
         W = config.KEYWORD_WINDOW
 
@@ -179,11 +178,10 @@ class Matcher:
                 cats = sorted({c for _, _, c in near})
                 kws = sorted({w for _, w, _ in near})
                 in_title = span[0] < title_end
-                kw_in_title = bool(kw_pos) and kw_pos[0] < title_end
 
                 if cats:
                     score += 20 + min(5 * (len(cats) - 1), 15)
-                elif in_title and any_kw:
+                elif in_title and kw:
                     score += 10
                     cats = sorted({c for _, _, c in kw})
                     kws = sorted({w for _, w, _ in kw})
@@ -200,6 +198,7 @@ class Matcher:
         # «Freedom Finance» внутри «Freedom Finance Europe» — оставляем только длинное
         hits = list(best.values())
         orgs = [h for h in hits if h.ent.kind == "org"]
+
         def inside(h):
             return any(o is not h and o.span[0] <= h.span[0] and h.span[1] <= o.span[1]
                        and (o.span[1] - o.span[0]) > (h.span[1] - h.span[0]) for o in orgs)

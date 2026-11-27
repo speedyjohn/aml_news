@@ -68,11 +68,14 @@ def _sub_with_map(s, idx, pattern, repl):
     out, oidx, pos = [], [], 0
     for m in pattern.finditer(s):
         a, b = m.start(), m.end()
-        out.append(s[pos:a]); oidx.extend(idx[pos:a])
+        out.append(s[pos:a])
+        oidx.extend(idx[pos:a])
         r = repl(m)
-        out.append(r); oidx.extend([idx[a]] * len(r))
+        out.append(r)
+        oidx.extend([idx[a]] * len(r))
         pos = b
-    out.append(s[pos:]); oidx.extend(idx[pos:])
+    out.append(s[pos:])
+    oidx.extend(idx[pos:])
     return "".join(out), oidx
 
 
@@ -104,10 +107,6 @@ def normalize_with_map(text: str):
 
 def normalize(text: str) -> str:
     return normalize_with_map(text)[0]
-
-
-def tokens(text: str) -> list[str]:
-    return normalize(text).split()
 
 
 _VOWELS = "aeiou"

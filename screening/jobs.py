@@ -12,7 +12,7 @@ import traceback
 from pathlib import Path
 
 from django.conf import settings
-from django.db import OperationalError, close_old_connections, connection
+from django.db import OperationalError, close_old_connections, connection, transaction
 from django.utils import timezone
 
 from .models import Job
@@ -43,16 +43,11 @@ def remove_docs(job: Job):
 def _steps(job: Job) -> list[list[str]]:
     base = [sys.executable, "-u", str(MAIN)]
 
+    sources = [flag for flag, on in (("--telegram", job.use_telegram), ("--rss", job.use_rss),
+                                     ("--gnews", job.use_gnews), ("--gdelt", job.use_gdelt)) if on]
+
     def collect():
-        args = base + ["collect", "--days", str(job.days)]
-        if job.use_gdelt:
-            args.append("--gdelt")
-        if job.use_gnews:
-            args.append("--gnews")
-        if job.use_rss:
-            args.append("--rss")
-        if job.use_telegram:
-            args.append("--telegram")
+        args = base + ["collect", "--days", str(job.days)] + sources
         if job.slice_days:
             args += ["--slice-days", str(job.slice_days)]
         return args
@@ -73,10 +68,7 @@ def _steps(job: Job) -> list[list[str]]:
         return args
 
     def neg_collect():
-        args = base + ["neg-collect", "--days", str(job.days)]
-        flags = [("--telegram", job.use_telegram), ("--rss", job.use_rss),
-                 ("--gnews", job.use_gnews), ("--gdelt", job.use_gdelt)]
-        args += [f for f, on in flags if on]
+        args = base + ["neg-collect", "--days", str(job.days)] + sources
         if job.neg_source_id:
             args += ["--source-id", str(job.neg_source_id)]
         return args
@@ -100,11 +92,10 @@ def _steps(job: Job) -> list[list[str]]:
         return pre + [match()]
     if job.command == "load-names":
         return [load_names()]
-    aml = pre + [collect(), base + ["fetch-text"], match()]
+    pipeline = pre + [collect(), base + ["fetch-text"], match()]
     if job.command == "both":
-        return aml + neg_pipeline
-    # pipeline
-    return aml
+        return pipeline + neg_pipeline
+    return pipeline
 
 
 def _execute(job: Job, log_path: Path) -> int:
@@ -174,6 +165,15 @@ def submit(job: Job):
     job.status = "queued"
     job.save(update_fields=["status"])
     start_next()
+
+
+def enqueue(**fields) -> tuple[Job, bool]:
+    """Создаёт запуск и ставит его в очередь, когда запись сохранится в базе.
+    Возвращает (запуск, выполняется ли сейчас другой)."""
+    job = Job.objects.create(**fields)
+    busy = is_busy()
+    transaction.on_commit(lambda: submit(job))
+    return job, busy
 
 
 def stop(job: Job) -> bool:

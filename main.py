@@ -206,7 +206,7 @@ def main():
             steps.append(("GDELT", lambda: negative.collect_gdelt(conn, a.days)))
         for name, fn in steps:
             st = fn()
-            print(f"{name}: {negative._fmt(st)}")
+            print(f"{name}: {negative.format_stats(st)}")
 
     elif a.cmd == "neg-fetch-text":
         import negative

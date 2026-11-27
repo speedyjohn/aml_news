@@ -7,7 +7,6 @@ save_item() кладёт его в neg_news (или засчитывает ка�
 найденного сюжета).
 """
 import re
-import sys
 import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -18,15 +17,11 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import feedparser
 
 import config
-from collect import _gdelt_request, _parse_date, _strip_html, fetch_page, session, to_dt
+from collect import (GNEWS_URL, fetch_page, gdelt_request, gnews_title, log, parse_date, session,
+                     strip_html, to_dt)
 from db import now
 from keywords import KeywordIndex
 from normalize import normalize, normalize_with_map
-
-
-def log(*a):
-    print(*a, file=sys.stderr, flush=True)
-
 
 NEG_INDEX = KeywordIndex(config.NEG_KEYWORDS)
 REGION_INDEX = KeywordIndex(config.NEG_REGIONS, use_stem=False)
@@ -290,7 +285,7 @@ def consider(conn, item: dict, stats: Counter) -> Verdict:
     return v
 
 
-def _fmt(stats: Counter) -> str:
+def format_stats(stats: Counter) -> str:
     s = (f"просмотрено {stats['seen']}, новых {stats['new']}, перепечаток {stats['copy']}, "
          f"уже были {stats['dup']}, не подошли {stats['skipped']}")
     return s + (f", старше периода {stats['old']}" if stats["old"] else "")
@@ -299,9 +294,6 @@ def _fmt(stats: Counter) -> str:
 # ---------------------------------------------------------------------------
 # Google News
 # ---------------------------------------------------------------------------
-GNEWS_URL = "https://news.google.com/rss/search"
-
-
 def gnews_queries() -> list[str]:
     """Все запросы — с site:kz (только казахстанские сайты, до 100 результатов);
     общие — ещё и без ограничения, чтобы поймать издания не в зоне .kz
@@ -328,22 +320,18 @@ def collect_gnews(conn, days: int = 7) -> Counter:
             continue
         st = Counter()
         for e in feed.entries:
-            src = e.get("source") or {}
-            src_title = src.get("title")
-            title = e.get("title", "")
-            if src_title and title.endswith(" - " + src_title):
-                title = title[: -len(src_title) - 3]
+            title, src = gnews_title(e)
             domain = domain_of(src.get("href"))
             consider(conn, {
                 "url": e.get("link"), "title": title, "collector": "gnews", "query": q,
-                "source": source_name(domain, src_title), "source_domain": domain,
-                "published": _parse_date(e), "lang": hl, "kz_outlet": is_kz_domain(domain),
+                "source": source_name(domain, src.get("title")), "source_domain": domain,
+                "published": parse_date(e), "lang": hl, "kz_outlet": is_kz_domain(domain),
                 # у Google News нет текста, ссылка — редирект: текст не докачивается
                 "text_status": "skipped",
             }, st)
         conn.commit()
         total.update(st)
-        log(f"[neg/gnews] {i}/{len(jobs)} {q!r}: {_fmt(st)}")
+        log(f"[neg/gnews] {i}/{len(jobs)} {q!r}: {format_stats(st)}")
         time.sleep(config.GNEWS_PAUSE_SEC)
     return total
 
@@ -357,11 +345,7 @@ def collect_gdelt(conn, days: int = 7, workers: int = 8) -> Counter:
     start = end - timedelta(days=min(days, 90))
     log(f"[neg/gdelt] запросов: {len(config.NEG_GDELT_QUERIES)}")
     for q in config.NEG_GDELT_QUERIES:
-        arts = _gdelt_request(q, {
-            "query": q, "mode": "ArtList", "format": "json", "maxrecords": 250,
-            "sort": "DateDesc", "startdatetime": start.strftime("%Y%m%d%H%M%S"),
-            "enddatetime": end.strftime("%Y%m%d%H%M%S"),
-        })
+        arts = gdelt_request(q, start, end)
         if arts is None:
             # GDELT так и не ответил после всех повторов (лимит запросов): остальные
             # запросы сейчас тоже упрутся в лимит — не ждём их, попробуем в следующий раз
@@ -410,7 +394,7 @@ def collect_gdelt(conn, days: int = 7, workers: int = 8) -> Counter:
                     consider(conn, it, st)
         conn.commit()
         total.update(st)
-        log(f"[neg/gdelt] {q!r}: найдено {len(arts)}; {_fmt(st)}")
+        log(f"[neg/gdelt] {q!r}: найдено {len(arts)}; {format_stats(st)}")
     return total
 
 
@@ -450,19 +434,19 @@ def collect_rss(conn, days: int = 7, only_id: int | None = None) -> Counter:
             log(f"[neg/rss] {src['name']}: НЕ ОТКРЫЛАСЬ ({msg}) {src['handle']}")
             _source_done(conn, src, f"error: {msg}", 0, st)
             continue
-        newest = max((d for d in map(_parse_date, feed.entries) if d), default=None)
+        newest = max((d for d in map(parse_date, feed.entries) if d), default=None)
         for e in feed.entries:
-            published = _parse_date(e)
+            published = parse_date(e)
             if published and published < since:
                 st["old"] += 1
                 continue                      # старые записи (бывают «замёрзшие» ленты)
             link = e.get("link")
             content = e.get("content") or []
-            full = _strip_html(content[0].get("value")) if content else ""
-            summary = _strip_html(e.get("summary") or e.get("description"))
+            full = strip_html(content[0].get("value")) if content else ""
+            summary = strip_html(e.get("summary") or e.get("description"))
             domain = domain_of(link)
             consider(conn, {
-                "url": link, "title": _strip_html(e.get("title")), "collector": "rss",
+                "url": link, "title": strip_html(e.get("title")), "collector": "rss",
                 "query": src["handle"], "source": src["name"], "source_domain": domain,
                 "source_id": src["id"], "published": published,
                 "summary": summary or None,
@@ -473,7 +457,7 @@ def collect_rss(conn, days: int = 7, only_id: int | None = None) -> Counter:
             }, st)
         _source_done(conn, src, "ok", len(feed.entries), st, newest)
         total.update(st)
-        log(f"[neg/rss] {src['name']}: в ленте {len(feed.entries)}; {_fmt(st)}")
+        log(f"[neg/rss] {src['name']}: в ленте {len(feed.entries)}; {format_stats(st)}")
     return total
 
 
@@ -489,7 +473,7 @@ def _tg_text(el) -> str:
     return re.sub(r"[ \t]+", " ", el.text_content()).strip()
 
 
-def parse_telegram_page(html: str, handle: str):
+def parse_telegram_page(html: str):
     """Посты со страницы t.me/s/<канал>: [(id, datetime, text, [ссылки])], before."""
     import lxml.html
     doc = lxml.html.fromstring(html)
@@ -530,7 +514,7 @@ def collect_telegram(conn, days: int = 7, pages: int | None = None,
                 r = session.get(url, timeout=30)
                 if r.status_code != 200:
                     raise RuntimeError(f"HTTP {r.status_code}")
-                posts, before = parse_telegram_page(r.text, handle)
+                posts, before = parse_telegram_page(r.text)
             except Exception as e:
                 status = f"error: {e if isinstance(e, RuntimeError) else type(e).__name__}"
                 log(f"[neg/telegram] {src['name']}: {status}")
@@ -565,7 +549,7 @@ def collect_telegram(conn, days: int = 7, pages: int | None = None,
             time.sleep(config.NEG_TELEGRAM_PAUSE_SEC)
         _source_done(conn, src, status, found, st, newest)
         total.update(st)
-        log(f"[neg/telegram] {src['name']} (@{handle}): постов {found}; {_fmt(st)}")
+        log(f"[neg/telegram] {src['name']} (@{handle}): постов {found}; {format_stats(st)}")
     return total
 
 
@@ -637,29 +621,3 @@ def reanalyze(conn, all_rows: bool = False, batch: int = 500) -> Counter:
         st["deleted"] += len(deletes)
     log(f"[neg/analyze] обновлено {st['updated']}, убрано (больше не подходят) {st['deleted']}")
     return st
-
-
-def add_manual(conn, url: str | None = None, title: str | None = None, text: str | None = None,
-               source: str | None = None, published=None) -> int:
-    """Добавить новость вручную (из панели). Если есть ссылка, а текста/заголовка
-    нет — скачиваем страницу. Возвращает id."""
-    url = canonical_url(url) if url else None
-    meta, status = {}, ("ok" if text else None)
-    if url and not (text and title):
-        page_text, status, meta = fetch_page(url, True)
-        text = text or page_text
-    domain = domain_of(url)
-    title = title or meta.get("title") or (make_title(text) if text else url)
-    source = source or source_name(domain, meta.get("sitename"))
-    published = to_dt(published) or meta.get("date")
-    v = analyze(title, None, text, kz_outlet=is_kz_domain(domain))
-    row = conn.execute(
-        "INSERT INTO neg_news (url, title, source, source_domain, collector, published, text, "
-        "text_status, title_key, kz_outlet, score, categories, keywords, regions, kz_signal, "
-        "analyzed_at) VALUES (%s,%s,%s,%s,'manual',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, now()) "
-        "ON CONFLICT (url) DO UPDATE SET url = excluded.url RETURNING id",
-        (url, title, source, domain, published, text, status if text else (status or "empty"),
-         title_key(title), is_kz_domain(domain), v.score, "; ".join(v.categories) or None,
-         "; ".join(v.keywords) or None, "; ".join(v.regions) or None, v.kz_signal)).fetchone()
-    conn.commit()
-    return row[0]

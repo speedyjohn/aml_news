@@ -139,8 +139,8 @@ GNEWS_PAUSE_SEC = 2
 
 # ---------------------------------------------------------------------------
 # Сбор: обычные RSS-ленты.
-# ВНИМАНИЕ: адреса лент — кандидаты, проверить их из моей среды не получилось.
-# Команда collect --rss выведет, какие ленты не открылись; поправьте их тут.
+# Адреса лент со временем меняются: команда collect --rss выведет, какие
+# ленты не открылись, — поправьте их тут.
 # ---------------------------------------------------------------------------
 RSS_FEEDS = [
     # Казахстан
@@ -216,7 +216,8 @@ GENERIC_WORDS = [
     "metal", "electric", "electronics", "digital", "media", "network", "bank", "finance",
     "financial", "insurance", "hong", "kong", "hk", "shanghai", "beijing",
     "shenzhen", "guangzhou", "dubai", "uae", "turkey", "istanbul", "almaty", "astana",
-    "company", "firm", "corporate", "treasury", "notes", "bonds", "fund", "securities", "business", "office", "branch", "partner", "line",
+    "company", "firm", "corporate", "treasury", "notes", "bonds", "fund", "securities",
+    "business", "office", "branch", "partner", "line",
     "торговый", "дом", "групп", "компания", "строй", "сервис", "транс", "логистик",
     "казахстан", "азия", "импорт", "экспорт", "алматы", "астана", "страховая",
     "trans", "stroy", "servis", "grupp", "kompaniya", "torgovyy", "dom",

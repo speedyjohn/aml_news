@@ -10,13 +10,10 @@ from django.template.response import TemplateResponse
 from django.urls import reverse
 from django.utils import timezone
 
-import config as aml_config
-
 from .models import NegNews, NegSource
-from .neg_admin import NEG_CAT_SHORT, neg_json_response, neg_xlsx_response
+from .neg_admin import NEG_CAT_SHORT, STRONG, neg_json_response, neg_xlsx_response
 
 PERIODS = [(1, "Сутки"), (7, "7 дней"), (30, "30 дней"), (90, "90 дней")]
-STRONG = aml_config.NEG_STRONG_SCORE
 
 
 def _period(request) -> int:
@@ -39,13 +36,11 @@ def _list_url(**params) -> str:
     return f"{url}?{urlencode(params)}" if params else url
 
 
-def _bars(counter: Counter, url_param: str, days: int, limit: int = 12, short=None):
+def _bars(counter: Counter, url_param: str, days: int, limit: int = 12):
     top = counter.most_common(limit)
     peak = max((n for _, n in top), default=1)
-    period = {"period": days} if days in (1, 7, 30, 90) else {}
-    return [{"name": (short or {}).get(k, k), "full": k, "n": n,
-             "pct": max(round(100 * n / peak), 2),
-             "url": _list_url(**{url_param: k}, **period) if url_param else ""}
+    return [{"name": k, "full": k, "n": n, "pct": max(round(100 * n / peak), 2),
+             "url": _list_url(**{url_param: k}, period=days)}
             for k, n in top]
 
 
@@ -101,8 +96,8 @@ def overview_view(request):
         x["rest"] = x["n"] - x["s"]
     no_date = daily.get(None, {}).get("n", 0)
 
-    rows = qs.exclude(review_status="irrelevant").values_list("categories", "regions", "source")
-    rows = list(rows)
+    rows = list(qs.exclude(review_status="irrelevant")
+                .values_list("categories", "regions", "source"))
     cats = _split_counter(r[0] for r in rows)
     regs = _split_counter(r[1] for r in rows)
     srcs = Counter(r[2] for r in rows if r[2])
@@ -114,9 +109,6 @@ def overview_view(request):
     stale_since = timezone.now() - timedelta(days=14)
     sources_stale = NegSource.objects.filter(enabled=True, last_item_at__lt=stale_since).count()
 
-    def period_url(d):
-        return f"?days={d}"
-
     def export_url(fmt, **extra):
         return "?" + urlencode({"days": days, "export": fmt, **extra})
 
@@ -124,7 +116,7 @@ def overview_view(request):
         **admin.site.each_context(request),
         "title": "Негативные новости РК",
         "days": days,
-        "periods": [{"d": d, "label": lbl, "url": period_url(d), "active": d == days}
+        "periods": [{"d": d, "label": lbl, "url": f"?days={d}", "active": d == days}
                     for d, lbl in PERIODS],
         "kpi": [
             {"title": f"Сильные, ждут проверки (≥ {STRONG})", "icon": "pending_actions",
@@ -146,7 +138,7 @@ def overview_view(request):
         "series_mid": peak // 2 if peak >= 4 else None,
         "chart_days": chart_days,
         "no_date": no_date,
-        "categories": _bars(cats, "cat", days, short=None),
+        "categories": _bars(cats, "cat", days),
         "regions": _bars(regs, "region", days, limit=21),
         "sources": _bars(srcs, "source__icontains", days, limit=10),
         "latest": latest,

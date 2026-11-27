@@ -11,5 +11,4 @@ psycopg[binary]>=3.2,<4
 django>=5.2,<6
 django-unfold==0.91.0
 # Telegram: веб-версия t.me/s разбирается через lxml, закрытые каналы — через Telethon
-lxml
 telethon>=1.40

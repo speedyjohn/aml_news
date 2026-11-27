@@ -159,7 +159,7 @@ class Helpers(unittest.TestCase):
         </div>
         <div class="tgme_widget_message" data-post="chan/124"><div class="photo"></div></div>
         </body></html>"""
-        posts, before = parse_telegram_page(html, "chan")
+        posts, before = parse_telegram_page(html)
         self.assertEqual(before, "100")
         self.assertEqual(len(posts), 1)
         pid, dt, text, links = posts[0]

@@ -57,7 +57,7 @@ def phrase_regex(phrase: str, use_stem: bool = True) -> str | None:
     """
     exact = phrase.rstrip().endswith("$")
     toks = normalize(phrase.rstrip().rstrip("$")).split()
-    if not toks:
+    if len("".join(toks)) < 3:      # слишком короткие фразы дают шум
         return None
     parts = []
     for i, t in enumerate(toks):
@@ -70,11 +70,7 @@ def phrase_regex(phrase: str, use_stem: bool = True) -> str | None:
             parts.append(re.escape(t) + "(?= )" if exact else re.escape(base))
         else:
             parts.append(re.escape(base) + (_FLEX if len(t) >= 4 else ""))
-    rx = " " + " ".join(parts)
-    # слишком короткие основы дают шум
-    if len("".join(toks)) < 3:
-        return None
-    return rx
+    return " " + " ".join(parts)
 
 
 class KeywordIndex:

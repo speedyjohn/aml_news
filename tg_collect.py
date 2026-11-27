@@ -608,11 +608,9 @@ def collect_telegram(conn, days: int = 30) -> int:
         f"{acc['me'] or 'подключён' if acc else 'не подключён'}")
 
     total_new = 0
-    via_account = []
-    web = [ch for ch in channels if ch["username"] and ch["method"] != "account"]
+    web, via_account = [], []
     for ch in channels:
-        if not ch["username"] or ch["method"] == "account":
-            via_account.append(ch)
+        (web if ch["username"] and ch["method"] != "account" else via_account).append(ch)
     for i, ch in enumerate(web):
         if i:
             time.sleep(config.TELEGRAM_WEB_PAUSE_SEC)

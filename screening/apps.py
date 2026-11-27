@@ -1,3 +1,4 @@
+import os
 import sys
 
 from django.apps import AppConfig
@@ -11,8 +12,6 @@ class ScreeningConfig(AppConfig):
         # Таблицы скрининга и негативных новостей создаёт db.py (их же использует
         # main.py). При старте панели доводим схему до актуальной версии, чтобы
         # панель открывалась и на пустой базе.
-        import os
-
         import db as aml_db
         argv = " ".join(sys.argv)
         if any(cmd in argv for cmd in ("runserver", "migrate", "import_sqlite")):

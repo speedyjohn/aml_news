@@ -301,21 +301,23 @@ class MatchAdmin(ModelAdmin):
     def row_open(self, request, object_id):
         return redirect(Match.objects.get(pk=object_id).url)
 
+    def _detail(self, request, object_id, status, message):
+        Match.objects.filter(pk=object_id).update(review_status=status)
+        messages.success(request, message)
+        return redirect(reverse("admin:screening_match_change", args=[object_id]))
+
     @action(description="Релевантно", icon="flag", variant="danger")
     def detail_relevant(self, request, object_id):
-        Match.objects.filter(pk=object_id).update(review_status="relevant")
-        messages.success(request, "Отмечено как релевантное")
-        return redirect(reverse("admin:screening_match_change", args=[object_id]))
+        return self._detail(request, object_id, "relevant", "Отмечено как релевантное")
 
     @action(description="Ложное срабатывание", icon="block")
     def detail_false(self, request, object_id):
-        Match.objects.filter(pk=object_id).update(review_status="false_positive")
-        messages.success(request, "Отмечено как ложное срабатывание")
-        return redirect(reverse("admin:screening_match_change", args=[object_id]))
+        return self._detail(request, object_id, "false_positive",
+                            "Отмечено как ложное срабатывание")
 
     @action(description="Открыть новость", icon="open_in_new")
     def detail_open(self, request, object_id):
-        return redirect(Match.objects.get(pk=object_id).url)
+        return self.row_open(request, object_id)
 
 
 # --- Новости --------------------------------------------------------------------
@@ -750,9 +752,7 @@ class JobAdmin(ModelAdmin):
 
     # быстрые кнопки над списком
     def _quick_job(self, request, **kw):
-        job = Job.objects.create(**kw)
-        busy = jobs.is_busy()
-        transaction.on_commit(lambda: jobs.submit(job))
+        job, busy = jobs.enqueue(**kw)
         messages.info(request, "Поставлено в очередь" if busy else "Запущено")
         return redirect(reverse("admin:screening_job_change", args=[job.pk]))
 
